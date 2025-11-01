@@ -33,6 +33,16 @@
                     <button id="get-reaction-history" class="btn-secondary">View History</button>
                 </div>
                 <div class="form-group">
+                    <label>Listening Mode:</label>
+                    <div class="mic-widget">
+                        <button id="toggle-listening" class="btn-success">Start Listening</button>
+                        <div class="mic-indicator">
+                            <div id="mic-level" class="mic-level" style="width:0%"></div>
+                        </div>
+                        <div id="mic-status" class="mic-status">Idle</div>
+                    </div>
+                </div>
+                <div class="form-group">
                     <label>Simulate Reaction:</label>
                     <select id="simulate-reaction">
                         <option value="laughing">😂 Laughing</option>

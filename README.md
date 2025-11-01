@@ -52,6 +52,25 @@ This project provides **two implementation approaches**:
 - **Adaptive Comedy Style**: Changes based on audience engagement
 - **Performance Analytics**: Track engagement and success metrics
 
+## Error Handling
+
+All API endpoints return structured JSON errors with consistent fields when failures occur (no silent fallbacks):
+
+```
+HTTP 502
+{
+  "error": {
+    "code": "UPSTREAM_AUTH",
+    "message": "Upstream authentication failed (check OPENAI_API_KEY)",
+    "upstream_status": 401,
+    "details": {},
+    "timestamp": "2025-11-01T00:00:00Z"
+  }
+}
+```
+
+Common codes: `UPSTREAM_AUTH`, `UPSTREAM_ERROR`, `UPSTREAM_TIMEOUT`, `VALIDATION_ERROR`, `INTERNAL_ERROR`.
+
 ## Setup
 
 ### Prerequisites

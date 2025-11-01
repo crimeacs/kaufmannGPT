@@ -24,6 +24,7 @@ import os
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from audience_analyzer import RealtimeAudienceAnalyzer, AudienceAnalyzer
+from .error_utils import map_exception, error_payload
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -166,7 +167,8 @@ async def analyze_audio(request: AudioAnalysisRequest):
         error_msg = f"Error analyzing audio: {e}"
         logger.error(error_msg)
         await log_queue.put({"service": "audience", "message": error_msg, "level": "error"})
-        raise HTTPException(status_code=500, detail=str(e))
+        status, payload = map_exception(e)
+        return JSONResponse(status_code=status, content=payload)
 
 
 @app.post("/analyze-file")
@@ -192,7 +194,8 @@ async def analyze_audio_file(file: UploadFile = File(...)):
 
     except Exception as e:
         logger.error(f"Error analyzing audio file: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        status, payload = map_exception(e)
+        return JSONResponse(status_code=status, content=payload)
 
 
 @app.websocket("/ws/analyze")
@@ -205,7 +208,8 @@ async def websocket_analyze(websocket: WebSocket):
     await websocket.accept()
     logger.info("WebSocket connection established for audio analysis")
 
-    analyzer_instance = get_realtime_analyzer()
+    # Use REST analyzer per chunk to keep WS endpoint simple
+    analyzer_instance = get_rest_analyzer()
 
     try:
         while True:
@@ -222,6 +226,16 @@ async def websocket_analyze(websocket: WebSocket):
                     audio_data = base64.b64decode(audio_base64)
                     analysis = await analyzer_instance.analyze_audio_chunk(audio_data)
 
+                    # Update state
+                    reaction_history.append(analysis)
+                    global latest_reaction
+                    latest_reaction = analysis
+
+                    # Log
+                    msg = f"WS analysis: {analysis.get('reaction_type','unknown')} (conf {analysis.get('confidence',0):.2f})"
+                    logger.info(msg)
+                    await log_queue.put({"service": "audience", "message": msg, "level": "info"})
+
                     # Send back analysis
                     await websocket.send_json(analysis)
                 else:
@@ -235,9 +249,8 @@ async def websocket_analyze(websocket: WebSocket):
                 })
             except Exception as e:
                 logger.error(f"Error in WebSocket analysis: {e}")
-                await websocket.send_json({
-                    "error": str(e)
-                })
+                status, payload = map_exception(e)
+                await websocket.send_json(payload)
 
     except WebSocketDisconnect:
         logger.info("WebSocket connection closed")
@@ -256,15 +269,7 @@ async def get_latest_reaction():
     Used by joke service to coordinate comedy delivery
     """
     if latest_reaction is None:
-        return JSONResponse(
-            content={
-                "is_laughing": False,
-                "reaction_type": "unknown",
-                "confidence": 0.0,
-                "description": "No reactions analyzed yet",
-                "timestamp": datetime.now().isoformat()
-            }
-        )
+        return JSONResponse(status_code=404, content=error_payload("NO_DATA", "No reactions analyzed yet"))
 
     return JSONResponse(content=latest_reaction)
 

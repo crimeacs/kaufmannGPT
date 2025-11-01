@@ -223,6 +223,14 @@ button:disabled {
     line-height: 1.6;
 }
 
+/* Mic listening widget */
+.mic-widget { display: grid; grid-template-columns: 180px 1fr 120px; gap: 10px; align-items: center; }
+.mic-indicator { position: relative; height: 10px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 6px; overflow: hidden; }
+.mic-level { height: 100%; background: linear-gradient(90deg, #2dd4bf, #22c55e); width: 0%; transition: width 120ms linear; }
+.mic-status { font-size: 0.9rem; color: var(--text-medium); }
+
+button.listening { background-color: var(--warning-color); color: #09131f; }
+
 .log-entry {
     padding: 0.5rem;
     margin-bottom: 0.25rem;

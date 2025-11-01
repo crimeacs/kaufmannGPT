@@ -24,7 +24,11 @@ class AudienceAnalyzer:
             config: Configuration dictionary containing API keys and settings
         """
         self.api_key = config.get('openai_api_key')
-        self.model = config.get('audience_model', 'gpt-4o-realtime-preview')
+        model = config.get('audience_model', 'gpt-4o')
+        # Ensure a chat-completions compatible model when using REST path
+        if isinstance(model, str) and 'realtime' in model:
+            model = 'gpt-4o-mini'
+        self.model = model
         self.api_url = config.get('openai_api_url', 'https://api.openai.com/v1/chat/completions')
         self.analysis_interval = config.get('analysis_interval', 2.0)  # seconds
 

@@ -5,7 +5,7 @@ Listens on port 8001
 """
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
@@ -25,6 +25,7 @@ import io
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from joke_generator import RealtimeJokeGenerator
+from .error_utils import map_exception
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -134,18 +135,12 @@ async def fetch_latest_audience_reaction() -> Dict[str, Any]:
         log_msg = "Timeout fetching audience reaction"
         logger.warning(log_msg)
         await log_queue.put({"service": "joke", "message": log_msg, "level": "warning"})
+        raise TimeoutError(log_msg)
     except Exception as e:
         log_msg = f"Error fetching audience reaction: {e}"
         logger.error(log_msg)
         await log_queue.put({"service": "joke", "message": log_msg, "level": "error"})
-
-    # Return default
-    return {
-        "is_laughing": False,
-        "reaction_type": "neutral",
-        "confidence": 0.5,
-        "description": "Default reaction (audience service unavailable)"
-    }
+        raise
 
 
 @app.on_event("startup")
@@ -215,7 +210,8 @@ async def generate_joke(request: JokeRequest):
 
     except Exception as e:
         logger.error(f"Error generating joke: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        status, payload = map_exception(e)
+        return JSONResponse(status_code=status, content=payload)
 
 
 @app.post("/generate/audio")
@@ -253,7 +249,8 @@ async def generate_joke_audio(request: JokeRequest):
 
     except Exception as e:
         logger.error(f"Error generating joke audio: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        status, payload = map_exception(e)
+        return JSONResponse(status_code=status, content=payload)
 
 
 @app.post("/generate/auto", response_model=JokeResponse)
@@ -306,7 +303,8 @@ async def generate_joke_auto(theme: Optional[str] = None, include_audio: bool = 
         error_msg = f"Error in auto-generate: {e}"
         logger.error(error_msg)
         await log_queue.put({"service": "joke", "message": error_msg, "level": "error"})
-        raise HTTPException(status_code=500, detail=str(e))
+        status, payload = map_exception(e)
+        return JSONResponse(status_code=status, content=payload)
 
 
 @app.get("/stream/logs")
