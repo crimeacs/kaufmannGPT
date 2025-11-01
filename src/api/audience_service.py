@@ -247,6 +247,15 @@ async def websocket_analyze(websocket: WebSocket):
 
                 if audio_base64:
                     audio_data = base64.b64decode(audio_base64)
+                    # Debug: log audio stats
+                    try:
+                        stats = rt._audio_stats(audio_data)
+                        msg = f"WS recv chunk: bytes={len(audio_data)}, samples={int(stats.get('samples',0))}, rms={stats.get('rms',0):.3f}, peak={stats.get('peak',0):.3f}"
+                        logger.info(msg)
+                        await log_queue.put({"service": "audience", "message": msg, "level": "info"})
+                    except Exception:
+                        pass
+
                     await rt.send_audio_chunk(audio_data)
 
                     now = time.time()
@@ -257,6 +266,9 @@ async def websocket_analyze(websocket: WebSocket):
                         except Exception:
                             pass
                         await rt.request_response()
+                        dbg = "Committed buffer and requested analysis"
+                        logger.info(dbg)
+                        await log_queue.put({"service": "audience", "message": dbg, "level": "info"})
                         last_request_ts = now
                 else:
                     await websocket.send_json(error_payload("VALIDATION_ERROR", "No audio data provided"))

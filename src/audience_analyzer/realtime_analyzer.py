@@ -8,6 +8,8 @@ import json
 import logging
 import base64
 from typing import Dict, Any, Optional
+import struct
+import math
 import websockets
 from datetime import datetime
 
@@ -46,7 +48,7 @@ class RealtimeAudienceAnalyzer:
 
         try:
             self.ws = await websockets.connect(self.ws_url, extra_headers=headers)
-            self.logger.info("Connected to OpenAI Realtime API")
+            self.logger.info(f"Connected to OpenAI Realtime API (model={self.model})")
 
             # Configure session with stored prompt
             await self._configure_session()
@@ -104,6 +106,13 @@ class RealtimeAudienceAnalyzer:
         # Convert audio to base64
         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
 
+        # Log basic audio stats
+        stats = self._audio_stats(audio_data)
+        self.logger.info(
+            f"Append audio: bytes={len(audio_data)} samples={int(stats.get('samples',0))} "
+            f"rms={stats.get('rms',0):.3f} peak={stats.get('peak',0):.3f}"
+        )
+
         # Send input_audio_buffer.append event
         event = {
             "type": "input_audio_buffer.append",
@@ -121,6 +130,7 @@ class RealtimeAudienceAnalyzer:
             "type": "input_audio_buffer.commit"
         }
         await self.ws.send(json.dumps(event))
+        self.logger.debug("Committed audio buffer")
 
     async def request_response(self):
         """Request the model to generate a response"""
@@ -132,6 +142,7 @@ class RealtimeAudienceAnalyzer:
             }
         }
         await self.ws.send(json.dumps(event))
+        self.logger.debug("Requested analysis response")
 
     async def listen_for_responses(self):
         """
@@ -156,6 +167,7 @@ class RealtimeAudienceAnalyzer:
                 elif event_type == 'response.text.done':
                     # Complete text response
                     text = event.get('text', '')
+                    self.logger.info(f"Realtime text done: {text[:200]}")
                     try:
                         analysis = json.loads(text)
                         analysis['timestamp'] = datetime.now().isoformat()
@@ -184,6 +196,22 @@ class RealtimeAudienceAnalyzer:
             self.logger.info("WebSocket connection closed")
         except Exception as e:
             self.logger.error(f"Error in response listener: {e}")
+
+    def _audio_stats(self, audio_data: bytes) -> Dict[str, float]:
+        """Compute simple RMS and peak for PCM16 mono data."""
+        try:
+            # 2 bytes per sample
+            count = len(audio_data) // 2
+            if count == 0:
+                return {"samples": 0, "rms": 0.0, "peak": 0.0}
+            fmt = f"<{count}h"
+            samples = struct.unpack(fmt, audio_data[:count*2])
+            peak = max(abs(s) for s in samples)
+            rms = math.sqrt(sum((s*s) for s in samples) / count)
+            # Normalize to 0..1 range (int16)
+            return {"samples": count, "rms": rms/32768.0, "peak": peak/32768.0}
+        except Exception:
+            return {"samples": 0, "rms": 0.0, "peak": 0.0}
 
     async def analyze_audio_stream(self, audio_stream):
         """
