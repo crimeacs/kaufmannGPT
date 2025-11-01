@@ -13,6 +13,8 @@ let sourceNode = null;
 let processorNode = null;
 let ws = null;
 let lastSent = 0;
+let accumBuffers = [];
+let accumLen = 0;
 
 // Modal
 const modal = document.getElementById('response-modal');
@@ -220,7 +222,10 @@ function updateMicLevel(level) {
     const lvl = Math.max(0, Math.min(1, level));
     const pct = Math.round(lvl * 100);
     const bar = document.getElementById('mic-level');
-    if (bar) bar.style.width = pct + '%';
+    if (bar) {
+        bar.style.width = pct + '%';
+        if (lvl > 0.25) bar.classList.add('hot'); else bar.classList.remove('hot');
+    }
 }
 
 async function startListening() {
@@ -237,7 +242,10 @@ async function startListening() {
                 if (data.error) {
                     addLog('audience', `Analyzer error: ${data.error.code}: ${data.error.message}`, 'error');
                 } else if (data.reaction_type) {
-                    addLog('audience', `Live analysis: ${data.reaction_type} (conf ${Math.round((data.confidence||0)*100)}%)`, 'info');
+                    const conf = Math.round((data.confidence || 0) * 100);
+                    addLog('audience', `Live analysis: ${data.reaction_type} (conf ${conf}%)`, 'info');
+                    const statusEl = document.getElementById('mic-status');
+                    if (statusEl) statusEl.textContent = `Last: ${data.reaction_type} (${conf}%)`;
                 }
             } catch {}
         };
@@ -260,7 +268,7 @@ async function startListening() {
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         sourceNode = audioCtx.createMediaStreamSource(mediaStream);
-        const bufferSize = 2048;
+        const bufferSize = 4096; // ~93ms @44.1k
         processorNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
         sourceNode.connect(processorNode);
         processorNode.connect(audioCtx.destination);
@@ -273,9 +281,20 @@ async function startListening() {
             updateMicLevel(Math.sqrt(sum / input.length));
 
             if (!ws || ws.readyState !== 1) return;
+            // Accumulate ~0.6–1.0s of audio before sending
+            accumBuffers.push(input.slice(0));
+            accumLen += input.length;
             const now = Date.now();
-            if (now - lastSent < 400) return; // throttle ~2.5 msgs/sec
-            const down = downsampleBuffer(input, audioCtx.sampleRate, 16000);
+            const minWindow = Math.floor(audioCtx.sampleRate * 0.6);
+            if (now - lastSent < 600 || accumLen < minWindow) return;
+
+            // Merge accumulated buffers
+            const merged = new Float32Array(accumLen);
+            let offset = 0;
+            for (const buf of accumBuffers) { merged.set(buf, offset); offset += buf.length; }
+            accumBuffers = []; accumLen = 0;
+
+            const down = downsampleBuffer(merged, audioCtx.sampleRate, 16000);
             const pcm16 = floatTo16BitPCM(down);
             const b64 = bufToBase64(pcm16);
             ws.send(JSON.stringify({ audio: b64 }));
@@ -286,6 +305,8 @@ async function startListening() {
         document.getElementById('toggle-listening').textContent = 'Stop Listening';
         document.getElementById('toggle-listening').classList.add('listening');
         document.getElementById('mic-status').textContent = 'Listening...';
+        const dot = document.getElementById('mic-dot');
+        if (dot) dot.classList.add('on');
         addLog('system', 'Listening mode started', 'success');
     } catch (err) {
         addLog('audience', `Failed to start listening: ${err.message}`, 'error');
@@ -301,10 +322,12 @@ async function stopListening() {
         if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
         if (ws) try { ws.close(); } catch {}
     } finally {
-        audioCtx = null; mediaStream = null; sourceNode = null; processorNode = null; ws = null; listening = false;
+        audioCtx = null; mediaStream = null; sourceNode = null; processorNode = null; ws = null; listening = false; accumBuffers = []; accumLen = 0; lastSent = 0;
         document.getElementById('toggle-listening').textContent = 'Start Listening';
         document.getElementById('toggle-listening').classList.remove('listening');
         document.getElementById('mic-status').textContent = 'Idle';
+        const dot = document.getElementById('mic-dot');
+        if (dot) dot.classList.remove('on');
         updateMicLevel(0);
         addLog('system', 'Listening mode stopped', 'warning');
     }
