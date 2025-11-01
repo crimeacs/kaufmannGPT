@@ -226,8 +226,10 @@ function updateMicLevel(level) {
 async function startListening() {
     if (listening) return;
     try {
-        const wsUrl = httpToWs(AUDIENCE_SERVICE_URL) + '/ws/analyze';
-        ws = new WebSocket(wsUrl);
+        // Build ws URL robustly to avoid double slashes
+        const wsURLObj = new URL('/ws/analyze', AUDIENCE_SERVICE_URL);
+        wsURLObj.protocol = wsURLObj.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(wsURLObj.toString());
         ws.onopen = () => addLog('audience', 'Listening WS connected', 'success');
         ws.onmessage = (evt) => {
             try {
@@ -239,8 +241,21 @@ async function startListening() {
                 }
             } catch {}
         };
-        ws.onerror = () => addLog('audience', 'Listening WS error', 'error');
-        ws.onclose = () => addLog('audience', 'Listening WS closed', 'warning');
+        ws.onerror = () => {
+            addLog('audience', 'Listening WS error', 'error');
+        };
+        ws.onclose = () => {
+            addLog('audience', 'Listening WS closed', 'warning');
+            // Attempt reconnect while listening is enabled
+            if (listening) {
+                setTimeout(() => {
+                    if (listening) {
+                        addLog('system', 'Reconnecting listening WS...', 'info');
+                        startListening();
+                    }
+                }, 1500);
+            }
+        };
 
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();

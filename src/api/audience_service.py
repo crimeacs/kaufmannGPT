@@ -17,6 +17,7 @@ import sys
 import asyncio
 from pathlib import Path
 from datetime import datetime
+import time
 import yaml
 import os
 
@@ -201,52 +202,66 @@ async def analyze_audio_file(file: UploadFile = File(...)):
 @app.websocket("/ws/analyze")
 async def websocket_analyze(websocket: WebSocket):
     """
-    WebSocket endpoint for continuous audio analysis
+    WebSocket endpoint for continuous audio analysis using Realtime API
 
-    Client sends audio chunks, server responds with analysis
+    Client sends audio chunks (base64 PCM16), server streams back analysis
     """
     await websocket.accept()
     logger.info("WebSocket connection established for audio analysis")
 
-    # Use REST analyzer per chunk to keep WS endpoint simple
-    analyzer_instance = get_rest_analyzer()
+    rt = get_realtime_analyzer()
+    # Ensure realtime connection is ready
+    if not getattr(rt, 'ws', None):
+        ok = await rt.connect()
+        if not ok:
+            await websocket.send_json(error_payload("UPSTREAM_ERROR", "Failed to connect to Realtime API"))
+            await websocket.close()
+            return
+
+    last_request_ts = 0.0
+
+    async def forward_responses():
+        try:
+            async for analysis in rt.listen_for_responses():
+                # Update state and logs
+                reaction_history.append(analysis)
+                global latest_reaction
+                latest_reaction = analysis
+                msg = f"WS analysis: {analysis.get('reaction_type','unknown')} (conf {analysis.get('confidence',0):.2f})"
+                logger.info(msg)
+                await log_queue.put({"service": "audience", "message": msg, "level": "info"})
+                # Forward to client
+                await websocket.send_json(analysis)
+        except Exception as e:
+            logger.error(f"Error forwarding realtime responses: {e}")
+
+    forward_task = asyncio.create_task(forward_responses())
 
     try:
         while True:
-            # Receive audio data
             data = await websocket.receive_text()
 
-            # Parse message
             try:
                 message = json.loads(data)
                 audio_base64 = message.get('audio')
 
                 if audio_base64:
-                    # Decode and analyze
                     audio_data = base64.b64decode(audio_base64)
-                    analysis = await analyzer_instance.analyze_audio_chunk(audio_data)
+                    await rt.send_audio_chunk(audio_data)
 
-                    # Update state
-                    reaction_history.append(analysis)
-                    global latest_reaction
-                    latest_reaction = analysis
-
-                    # Log
-                    msg = f"WS analysis: {analysis.get('reaction_type','unknown')} (conf {analysis.get('confidence',0):.2f})"
-                    logger.info(msg)
-                    await log_queue.put({"service": "audience", "message": msg, "level": "info"})
-
-                    # Send back analysis
-                    await websocket.send_json(analysis)
+                    now = time.time()
+                    if now - last_request_ts > 1.5:
+                        # Commit and request analysis periodically
+                        try:
+                            await rt.commit_audio_buffer()
+                        except Exception:
+                            pass
+                        await rt.request_response()
+                        last_request_ts = now
                 else:
-                    await websocket.send_json({
-                        "error": "No audio data provided"
-                    })
-
+                    await websocket.send_json(error_payload("VALIDATION_ERROR", "No audio data provided"))
             except json.JSONDecodeError:
-                await websocket.send_json({
-                    "error": "Invalid JSON format"
-                })
+                await websocket.send_json(error_payload("VALIDATION_ERROR", "Invalid JSON format"))
             except Exception as e:
                 logger.error(f"Error in WebSocket analysis: {e}")
                 status, payload = map_exception(e)
@@ -257,8 +272,10 @@ async def websocket_analyze(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
     finally:
-        if analyzer_instance:
-            analyzer_instance.stop_listening()
+        try:
+            forward_task.cancel()
+        except Exception:
+            pass
 
 
 @app.get("/latest")
@@ -338,3 +355,19 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+else:
+    # ASGI wrapper to normalize multiple slashes in path (affects HTTP and WebSocket)
+    # This makes ws paths like //ws/analyze work, preventing client-side URL bugs from breaking the WS.
+    import re
+    _inner_app = app
+
+    async def _normalized_app(scope, receive, send):
+        if scope.get('type') in ('http', 'websocket'):
+            path = scope.get('path') or ''
+            if '//' in path:
+                # Create a shallow copy of scope to avoid mutating original
+                scope = dict(scope)
+                scope['path'] = re.sub(r'/+', '/', path)
+        await _inner_app(scope, receive, send)
+
+    app = _normalized_app
