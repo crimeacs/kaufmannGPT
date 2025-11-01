@@ -1,0 +1,10 @@
+* text=auto eol=lf
+
+# Ensure shell scripts use LF
+*.sh text eol=lf
+
+# Mark common audio formats as binary
+*.wav binary
+*.mp3 binary
+*.pcm binary
+

@@ -1,0 +1,22 @@
+# Core dependencies
+aiohttp==3.9.1
+asyncio==3.4.3
+pyyaml==6.0.1
+websockets==12.0
+
+# OpenAI SDK
+openai==1.12.0
+
+# Audio processing (optional, for future implementation)
+# pyaudio==0.2.14
+# sounddevice==0.4.6
+# pydub==0.25.1
+
+# Utilities
+python-dotenv==1.0.0
+
+# Development dependencies
+pytest==7.4.4
+pytest-asyncio==0.21.1
+black==23.12.1
+flake8==7.0.0

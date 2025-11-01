@@ -1,0 +1,35 @@
+# AI Stand-up Comedy Agent Configuration
+
+# OpenAI API Configuration
+# Set to null to use OPENAI_API_KEY from environment variables
+openai_api_key: null  # Will use environment variable OPENAI_API_KEY
+
+# Models
+joke_model: "gpt-realtime"     # Model for joke generation (gpt-realtime or gpt-4o)
+audience_model: "gpt-realtime" # Model for audience analysis (gpt-realtime or gpt-4o)
+tts_model: "tts-1"             # Text-to-speech model (tts-1 or tts-1-hd)
+
+# Stored Prompt IDs (optional - leave empty to use inline instructions)
+# Get these from https://platform.openai.com/prompts
+joke_prompt_id: ""             # e.g., "pmpt_690669c0b07881969bed67ac12c975ff07d719d6a001bd3c"
+audience_prompt_id: "pmpt_690669c0b07881969bed67ac12c975ff07d719d6a001bd3c"         # Prompt ID for audience analysis
+
+# Voice Settings
+voice: "ballad"  # Realtime API Options: alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar
+
+# Comedy Settings
+initial_theme: "tech and AI"
+comedy_style: "witty and intelligent with observational humor"
+
+# Performance Settings
+joke_interval: 8               # Seconds to wait between jokes
+max_jokes: 20                  # Maximum number of jokes per session
+analysis_interval: 2.0         # Seconds between audience analysis samples
+
+# Logging
+log_level: "INFO"              # DEBUG, INFO, WARNING, ERROR
+log_file: "logs/standup_agent.log"
+
+# Audio Settings (for future implementation)
+sample_rate: 16000             # Audio sample rate in Hz
+audio_chunk_duration: 2.0      # Duration of audio chunks in seconds

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Stand-up Comedy Agent - Debug Console</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <header>
+        <h1>🎭 AI Stand-up Comedy Agent</h1>
+        <div class="status-bar">
+            <div class="service-status">
+                <span class="status-dot" id="audience-status"></span>
+                <span>Audience Service</span>
+            </div>
+            <div class="service-status">
+                <span class="status-dot" id="joke-status"></span>
+                <span>Joke Service</span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <aside class="control-panel">
+            <h2>Control Panel</h2>
+
+            <!-- Audience Service Controls -->
+            <section class="control-section">
+                <h3>👥 Audience Service</h3>
+                <div class="button-group">
+                    <button id="get-latest-reaction" class="btn-primary">Get Latest Reaction</button>
+                    <button id="get-reaction-history" class="btn-secondary">View History</button>
+                </div>
+                <div class="form-group">
+                    <label>Simulate Reaction:</label>
+                    <select id="simulate-reaction">
+                        <option value="laughing">😂 Laughing</option>
+                        <option value="neutral">😐 Neutral</option>
+                        <option value="silent">🤐 Silent</option>
+                        <option value="clapping">👏 Clapping</option>
+                    </select>
+                    <button id="submit-reaction" class="btn-primary">Submit</button>
+                </div>
+            </section>
+
+            <!-- Joke Service Controls -->
+            <section class="control-section">
+                <h3>🎤 Joke Service</h3>
+                <div class="form-group">
+                    <label>Audience Reaction:</label>
+                    <select id="joke-reaction">
+                        <option value="laughing">😂 Laughing</option>
+                        <option value="neutral" selected>😐 Neutral</option>
+                        <option value="silent">🤐 Silent</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Theme (optional):</label>
+                    <input type="text" id="joke-theme" placeholder="e.g., AI, technology" />
+                </div>
+                <div class="button-group">
+                    <button id="generate-joke" class="btn-primary">Generate Joke</button>
+                    <button id="generate-joke-auto" class="btn-success">Auto-Generate</button>
+                </div>
+                <div class="button-group">
+                    <button id="get-stats" class="btn-secondary">Get Stats</button>
+                    <button id="reset-generator" class="btn-danger">Reset</button>
+                </div>
+            </section>
+
+            <!-- Auto Performance Mode -->
+            <section class="control-section">
+                <h3>🤖 Auto Mode</h3>
+                <p class="help-text">Continuous performance with random reactions</p>
+                <button id="start-auto-mode" class="btn-success">Start Auto Mode</button>
+                <button id="stop-auto-mode" class="btn-danger" disabled>Stop Auto Mode</button>
+                <div id="auto-mode-status"></div>
+            </section>
+        </aside>
+
+        <section class="log-panel">
+            <div class="log-header">
+                <h2>Real-Time Logs</h2>
+                <div class="log-controls">
+                    <button id="clear-logs" class="btn-secondary">Clear</button>
+                    <button id="toggle-autoscroll" class="btn-secondary">Auto-scroll: ON</button>
+                </div>
+            </div>
+            <div id="logs-container" class="logs"></div>
+        </section>
+    </main>
+
+    <!-- Response Modal -->
+    <div id="response-modal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close">&times;</span>
+            <h3 id="modal-title">Response</h3>
+            <pre id="modal-body"></pre>
+            <button id="modal-copy" class="btn-secondary">Copy to Clipboard</button>
+        </div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+</body>
+</html>
