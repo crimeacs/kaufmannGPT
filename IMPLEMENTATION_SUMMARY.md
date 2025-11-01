@@ -232,9 +232,9 @@ export OPENAI_API_KEY="your-key"
 ```
 
 ### Access Services
-- Frontend: http://localhost:3000
-- Audience API: http://localhost:8000
-- Joke API: http://localhost:8001
+- Frontend: http://localhost:3002
+- Audience API: http://localhost:8002
+- Joke API: http://localhost:8003
 
 ### Test Coordinated Services
 ```bash

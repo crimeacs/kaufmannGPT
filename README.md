@@ -13,7 +13,7 @@ export OPENAI_API_KEY="your-key-here"
 # Start all services
 ./start.sh
 
-# Open browser to http://localhost:3000
+# Open browser to http://localhost:3002
 ```
 
 See [DOCKER_README.md](DOCKER_README.md) for complete Docker documentation.
@@ -24,7 +24,7 @@ The system consists of three main components:
 
 1. **Audience Service (Port 8000)**: Listens to audience reactions via WebSocket and evaluates if they're laughing using OpenAI's Realtime API
 2. **Joke Service (Port 8001)**: Generates jokes and delivers them with native speech using OpenAI's Realtime API
-3. **Frontend (Port 3000)**: Debug console with real-time logs and API testing interface
+3. **Frontend (Port 3000, mapped to 3002 locally)**: Debug console with real-time logs and API testing interface
 
 ## Implementation Approaches
 

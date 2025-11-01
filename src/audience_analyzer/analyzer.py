@@ -82,21 +82,12 @@ class AudienceAnalyzer:
                     else:
                         error_text = await response.text()
                         self.logger.error(f"API error: {response.status} - {error_text}")
-                        return self._get_default_analysis()
+                        raise RuntimeError(f"Audience analysis API error: {response.status}")
 
         except Exception as e:
             self.logger.error(f"Error analyzing audio: {e}")
-            return self._get_default_analysis()
+            raise
 
-    def _get_default_analysis(self) -> Dict[str, Any]:
-        """Return default analysis when API fails"""
-        return {
-            'is_laughing': False,
-            'reaction_type': 'unknown',
-            'confidence': 0.0,
-            'description': 'Analysis failed',
-            'timestamp': datetime.now().isoformat()
-        }
 
     async def start_listening(self, audio_stream):
         """

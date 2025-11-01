@@ -90,11 +90,11 @@ class JokeGenerator:
                     else:
                         error_text = await response.text()
                         self.logger.error(f"API error: {response.status} - {error_text}")
-                        return self._get_fallback_joke(audience_reaction)
+                        raise RuntimeError(f"Joke generation API error: {response.status}")
 
         except Exception as e:
             self.logger.error(f"Error generating joke: {e}")
-            return self._get_fallback_joke(audience_reaction)
+            raise
 
     def _build_system_prompt(self, audience_reaction: str) -> str:
         """Build system prompt based on audience reaction"""
@@ -120,22 +120,7 @@ class JokeGenerator:
 
         return f"Start your set with a joke about: {self.current_theme}"
 
-    def _get_fallback_joke(self, audience_reaction: str) -> Dict[str, Any]:
-        """Return a fallback joke when generation fails"""
-        fallback_jokes = [
-            "So... my AI joke generator just crashed. That's the most relatable tech moment I've had all day.",
-            "You know what's funny? Error 500. Said no one ever.",
-            "I'd tell you a UDP joke, but you might not get it."
-        ]
-
-        import random
-        return {
-            'text': random.choice(fallback_jokes),
-            'timestamp': datetime.now().isoformat(),
-            'audience_reaction': audience_reaction,
-            'theme': 'meta-comedy',
-            'is_fallback': True
-        }
+    
 
     async def text_to_speech(self, text: str, output_path: Optional[str] = None) -> bytes:
         """
@@ -177,11 +162,11 @@ class JokeGenerator:
                     else:
                         error_text = await response.text()
                         self.logger.error(f"TTS API error: {response.status} - {error_text}")
-                        return b''
+                        raise RuntimeError(f"TTS API error: {response.status}")
 
         except Exception as e:
             self.logger.error(f"Error generating speech: {e}")
-            return b''
+            raise
 
     async def perform_joke(self, audience_reaction: str, context: Optional[str] = None) -> Dict[str, Any]:
         """

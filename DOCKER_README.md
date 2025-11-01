@@ -6,7 +6,7 @@ Complete guide for running the AI Stand-up Comedy Agent using Docker containers.
 
 ```
 ┌─────────────────────────────────────────┐
-│  Frontend (Port 3000)                   │
+│  Frontend (Port 3000 → 3002)            │
 │  Nginx + Vite-built static files        │
 │  - Debug console                        │
 │  - Real-time logs                       │
@@ -36,7 +36,7 @@ Complete guide for running the AI Stand-up Comedy Agent using Docker containers.
 - Provides performance statistics
 - Streams real-time logs via SSE
 
-### 3. Frontend (Port 3000)
+### 3. Frontend (Port 3000 → 3002)
 - Debug console web interface
 - Real-time log viewer
 - API testing interface
@@ -71,13 +71,13 @@ This will:
 - Build all three containers
 - Start services in order (audience → joke → frontend)
 - Run health checks
-- Expose ports 8000, 8001, and 3000
+- Expose ports 8002, 8003, and 3002
 
 ### 3. Access the Application
 
-- **Frontend**: http://localhost:3000
-- **Audience Service**: http://localhost:8000
-- **Joke Service**: http://localhost:8001
+- **Frontend**: http://localhost:3002
+- **Audience Service**: http://localhost:8002
+- **Joke Service**: http://localhost:8003
 
 ## Docker Commands
 
@@ -247,9 +247,9 @@ docker-compose restart
 ### Port Already in Use
 ```bash
 # Find process using port
-lsof -i :8000
-lsof -i :8001
-lsof -i :3000
+lsof -i :8002
+lsof -i :8003
+lsof -i :3002
 
 # Kill process or change port in docker-compose.yml
 ```
@@ -295,15 +295,15 @@ server {
     server_name yourdomain.com;
 
     location / {
-        proxy_pass http://localhost:3000;
+        proxy_pass http://localhost:3002;
     }
 
     location /api/audience {
-        proxy_pass http://localhost:8000;
+        proxy_pass http://localhost:8002;
     }
 
     location /api/joke {
-        proxy_pass http://localhost:8001;
+        proxy_pass http://localhost:8003;
     }
 }
 ```

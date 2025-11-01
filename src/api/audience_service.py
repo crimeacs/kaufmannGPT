@@ -23,7 +23,7 @@ import os
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from audience_analyzer import RealtimeAudienceAnalyzer
+from audience_analyzer import RealtimeAudienceAnalyzer, AudienceAnalyzer
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -87,15 +87,23 @@ class HealthResponse(BaseModel):
     version: str
 
 
-# Initialize analyzer (singleton)
-analyzer = None
+# Initialize analyzers (singletons)
+realtime_analyzer = None
+rest_analyzer = None
 
 
-def get_analyzer():
-    global analyzer
-    if analyzer is None:
-        analyzer = RealtimeAudienceAnalyzer(config)
-    return analyzer
+def get_realtime_analyzer():
+    global realtime_analyzer
+    if realtime_analyzer is None:
+        realtime_analyzer = RealtimeAudienceAnalyzer(config)
+    return realtime_analyzer
+
+
+def get_rest_analyzer():
+    global rest_analyzer
+    if rest_analyzer is None:
+        rest_analyzer = AudienceAnalyzer(config)
+    return rest_analyzer
 
 
 @app.on_event("startup")
@@ -107,8 +115,8 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Audience Analysis Service shutting down...")
-    if analyzer:
-        await analyzer.disconnect()
+    if realtime_analyzer:
+        await realtime_analyzer.disconnect()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -139,7 +147,7 @@ async def analyze_audio(request: AudioAnalysisRequest):
         await log_queue.put({"service": "audience", "message": log_msg, "level": "info"})
 
         # Get analyzer instance
-        analyzer_instance = get_analyzer()
+        analyzer_instance = get_rest_analyzer()
 
         # Analyze audio
         analysis = await analyzer_instance.analyze_audio_chunk(audio_data)
@@ -175,7 +183,7 @@ async def analyze_audio_file(file: UploadFile = File(...)):
         logger.info(f"Analyzing audio file: {file.filename} ({len(audio_data)} bytes)")
 
         # Get analyzer instance
-        analyzer_instance = get_analyzer()
+        analyzer_instance = get_rest_analyzer()
 
         # Analyze audio
         analysis = await analyzer_instance.analyze_audio_chunk(audio_data)
@@ -197,7 +205,7 @@ async def websocket_analyze(websocket: WebSocket):
     await websocket.accept()
     logger.info("WebSocket connection established for audio analysis")
 
-    analyzer_instance = get_analyzer()
+    analyzer_instance = get_realtime_analyzer()
 
     try:
         while True:
