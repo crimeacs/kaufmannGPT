@@ -1,20 +1,27 @@
-// Configuration
-const AUDIENCE_SERVICE_URL = 'http://localhost:8002';
-const JOKE_SERVICE_URL = 'http://localhost:8003';
+// Configuration (mocked OpenAI-compatible pipeline by default)
+const USE_MOCK_API = true;
+const OPENAI_COMPAT_API_BASE = 'http://localhost:8000/v1';
 
 // State
 let autoScrollEnabled = true;
-let autoModeRunning = false;
-let autoModeInterval = null;
-let listening = false;
+let sessionRunning = false;
 let audioCtx = null;
 let mediaStream = null;
 let sourceNode = null;
 let processorNode = null;
-let ws = null;
-let lastSent = 0;
-let accumBuffers = [];
-let accumLen = 0;
+let analysisTimer = null;
+let analysisCanvas = null;
+let analysisCtx2d = null;
+let lastAudioRms = 0;
+
+// Elements
+const logsContainer = document.getElementById('logs-container');
+const startBtn = document.getElementById('start-session');
+const sessionStatus = document.getElementById('session-status');
+const cameraPreview = document.getElementById('camera-preview');
+const micStatus = document.getElementById('mic-status');
+const micDot = document.getElementById('mic-dot');
+const statusText = document.getElementById('status-text');
 
 // Modal
 const modal = document.getElementById('response-modal');
@@ -24,37 +31,33 @@ const modalClose = document.querySelector('.modal-close');
 const modalCopy = document.getElementById('modal-copy');
 
 function showModal(title, content) {
+    if (!modal) return;
     modalTitle.textContent = title;
-    modalBody.textContent = JSON.stringify(content, null, 2);
+    modalBody.textContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
     modal.classList.add('show');
 }
 
 function hideModal() {
+    if (!modal) return;
     modal.classList.remove('show');
 }
 
-modalClose.onclick = hideModal;
-window.onclick = (e) => {
-    if (e.target === modal) hideModal();
-};
-
-modalCopy.onclick = () => {
-    navigator.clipboard.writeText(modalBody.textContent);
-    modalCopy.textContent = 'Copied!';
-    setTimeout(() => {
-        modalCopy.textContent = 'Copy to Clipboard';
-    }, 2000);
-};
+if (modalClose) modalClose.onclick = hideModal;
+window.onclick = (e) => { if (e.target === modal) hideModal(); };
+if (modalCopy) {
+    modalCopy.onclick = () => {
+        navigator.clipboard.writeText(modalBody.textContent);
+        modalCopy.textContent = 'Copied!';
+        setTimeout(() => { modalCopy.textContent = 'Copy to Clipboard'; }, 2000);
+    };
+}
 
 // Logging
-const logsContainer = document.getElementById('logs-container');
-
 function addLog(service, message, level = 'info') {
+    if (!logsContainer) return;
     const entry = document.createElement('div');
     entry.className = `log-entry ${level}`;
-
     const timestamp = new Date().toLocaleTimeString();
-
     entry.innerHTML = `
         <div>
             <span class="timestamp">${timestamp}</span>
@@ -62,162 +65,17 @@ function addLog(service, message, level = 'info') {
         </div>
         <div class="message">${message}</div>
     `;
-
     logsContainer.appendChild(entry);
-
-    if (autoScrollEnabled) {
-        entry.scrollIntoView({ behavior: 'smooth' });
-    }
-
-    // Keep only last 200 logs
-    while (logsContainer.children.length > 200) {
-        logsContainer.removeChild(logsContainer.firstChild);
-    }
+    if (autoScrollEnabled) entry.scrollIntoView({ behavior: 'smooth' });
+    while (logsContainer.children.length > 200) logsContainer.removeChild(logsContainer.firstChild);
 }
 
-document.getElementById('clear-logs').onclick = () => {
-    logsContainer.innerHTML = '';
-    addLog('system', 'Logs cleared', 'info');
-};
+const clearLogsBtn = document.getElementById('clear-logs');
+if (clearLogsBtn) clearLogsBtn.onclick = () => { logsContainer.innerHTML = ''; addLog('system', 'Logs cleared', 'info'); };
+const toggleAutoScrollBtn = document.getElementById('toggle-autoscroll');
+if (toggleAutoScrollBtn) toggleAutoScrollBtn.onclick = (e) => { autoScrollEnabled = !autoScrollEnabled; e.target.textContent = `Auto-scroll: ${autoScrollEnabled ? 'ON' : 'OFF'}`; };
 
-document.getElementById('toggle-autoscroll').onclick = (e) => {
-    autoScrollEnabled = !autoScrollEnabled;
-    e.target.textContent = `Auto-scroll: ${autoScrollEnabled ? 'ON' : 'OFF'}`;
-};
-
-// Health checks
-async function checkHealth(url, statusElementId, serviceName) {
-    try {
-        const response = await fetch(`${url}/health`);
-        const statusDot = document.getElementById(statusElementId);
-
-        if (response.ok) {
-            statusDot.classList.add('online');
-            statusDot.classList.remove('offline');
-            return true;
-        } else {
-            throw new Error(`Status: ${response.status}`);
-        }
-    } catch (error) {
-        const statusDot = document.getElementById(statusElementId);
-        statusDot.classList.add('offline');
-        statusDot.classList.remove('online');
-        addLog('system', `${serviceName} is offline: ${error.message}`, 'error');
-        return false;
-    }
-}
-
-// Start health checks
-setInterval(() => {
-    checkHealth(AUDIENCE_SERVICE_URL, 'audience-status', 'Audience Service');
-    checkHealth(JOKE_SERVICE_URL, 'joke-status', 'Joke Service');
-}, 5000);
-
-// Initial check
-checkHealth(AUDIENCE_SERVICE_URL, 'audience-status', 'Audience Service');
-checkHealth(JOKE_SERVICE_URL, 'joke-status', 'Joke Service');
-
-// SSE Log Streaming
-function connectLogStream(url, serviceName) {
-    addLog('system', `Connecting to ${serviceName} log stream...`, 'info');
-
-    const eventSource = new EventSource(`${url}/stream/logs`);
-
-    eventSource.onmessage = (event) => {
-        try {
-            const data = JSON.parse(event.data);
-            addLog(data.service || serviceName, data.message, data.level || 'info');
-        } catch (error) {
-            console.error('Error parsing log:', error);
-        }
-    };
-
-    eventSource.onerror = (error) => {
-        addLog('system', `${serviceName} log stream disconnected`, 'warning');
-        eventSource.close();
-
-        // Reconnect after 5 seconds
-        setTimeout(() => {
-            addLog('system', `Reconnecting to ${serviceName} log stream...`, 'info');
-            connectLogStream(url, serviceName);
-        }, 5000);
-    };
-
-    return eventSource;
-}
-
-// Connect to log streams
-connectLogStream(AUDIENCE_SERVICE_URL, 'audience');
-connectLogStream(JOKE_SERVICE_URL, 'joke');
-
-// Helpers
-function httpToWs(url) {
-    try {
-        const u = new URL(url);
-        u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
-        return u.toString();
-    } catch {
-        return url.replace('https://', 'wss://').replace('http://', 'ws://');
-    }
-}
-
-async function parseJsonResponse(response) {
-    let data;
-    try {
-        data = await response.json();
-    } catch (e) {
-        throw new Error(`HTTP ${response.status}`);
-    }
-    if (!response.ok) {
-        const err = data && data.error ? data.error : { code: 'HTTP_ERROR', message: `HTTP ${response.status}` };
-        throw new Error(`${err.code}: ${err.message}`);
-    }
-    if (data && data.error) {
-        const err = data.error;
-        throw new Error(`${err.code}: ${err.message}`);
-    }
-    return data;
-}
-
-// Audio utils
-function downsampleBuffer(buffer, sampleRate, outSampleRate) {
-    if (outSampleRate === sampleRate) return buffer;
-    const ratio = sampleRate / outSampleRate;
-    const newLen = Math.round(buffer.length / ratio);
-    const result = new Float32Array(newLen);
-    let offsetResult = 0;
-    let offsetBuffer = 0;
-    while (offsetResult < newLen) {
-        const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-        // Simple average to low-pass a bit
-        let accum = 0, count = 0;
-        for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-            accum += buffer[i];
-            count++;
-        }
-        result[offsetResult] = accum / (count || 1);
-        offsetResult++;
-        offsetBuffer = nextOffsetBuffer;
-    }
-    return result;
-}
-
-function floatTo16BitPCM(floatBuf) {
-    const out = new Int16Array(floatBuf.length);
-    for (let i = 0; i < floatBuf.length; i++) {
-        let s = Math.max(-1, Math.min(1, floatBuf[i]));
-        out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-    }
-    return out.buffer;
-}
-
-function bufToBase64(buf) {
-    const bytes = new Uint8Array(buf);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    return btoa(binary);
-}
-
+// Audio visualization
 function updateMicLevel(level) {
     const lvl = Math.max(0, Math.min(1, level));
     const pct = Math.round(lvl * 100);
@@ -228,303 +86,137 @@ function updateMicLevel(level) {
     }
 }
 
-async function startListening() {
-    if (listening) return;
+// Session control
+async function startSession() {
+    if (sessionRunning) return;
     try {
-        // Build ws URL robustly to avoid double slashes
-        const wsURLObj = new URL('/ws/analyze', AUDIENCE_SERVICE_URL);
-        wsURLObj.protocol = wsURLObj.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(wsURLObj.toString());
-        ws.onopen = () => addLog('audience', 'Listening WS connected', 'success');
-        ws.onmessage = (evt) => {
-            try {
-                const data = JSON.parse(evt.data);
-                if (data.error) {
-                    addLog('audience', `Analyzer error: ${data.error.code}: ${data.error.message}`, 'error');
-                } else if (data.reaction_type) {
-                    const conf = Math.round((data.confidence || 0) * 100);
-                    addLog('audience', `Live analysis: ${data.reaction_type} (conf ${conf}%)`, 'info');
-                    const statusEl = document.getElementById('mic-status');
-                    if (statusEl) statusEl.textContent = `Last: ${data.reaction_type} (${conf}%)`;
-                }
-            } catch {}
-        };
-        ws.onerror = () => {
-            addLog('audience', 'Listening WS error', 'error');
-        };
-        ws.onclose = () => {
-            addLog('audience', 'Listening WS closed', 'warning');
-            // Attempt reconnect while listening is enabled
-            if (listening) {
-                setTimeout(() => {
-                    if (listening) {
-                        addLog('system', 'Reconnecting listening WS...', 'info');
-                        startListening();
-                    }
-                }, 1500);
-            }
-        };
+        statusText && (statusText.textContent = 'Requesting permissions...');
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'environment' }
+        });
 
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
+        mediaStream = stream;
+        if (cameraPreview) {
+            cameraPreview.srcObject = stream;
+            const playPromise = cameraPreview.play();
+            if (playPromise && typeof playPromise.then === 'function') {
+                playPromise.catch(() => {});
+            }
+        }
+
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        sourceNode = audioCtx.createMediaStreamSource(mediaStream);
-        const bufferSize = 4096; // ~93ms @44.1k
-        processorNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
+        sourceNode = audioCtx.createMediaStreamSource(stream);
+        processorNode = audioCtx.createScriptProcessor(4096, 1, 1);
         sourceNode.connect(processorNode);
         processorNode.connect(audioCtx.destination);
-
         processorNode.onaudioprocess = (e) => {
             const input = e.inputBuffer.getChannelData(0);
-            // RMS for mic level
             let sum = 0;
-            for (let i = 0; i < input.length; i++) sum += input[i]*input[i];
-            updateMicLevel(Math.sqrt(sum / input.length));
-
-            if (!ws || ws.readyState !== 1) return;
-            // Accumulate ~0.6–1.0s of audio before sending
-            accumBuffers.push(input.slice(0));
-            accumLen += input.length;
-            const now = Date.now();
-            const minWindow = Math.floor(audioCtx.sampleRate * 0.6);
-            if (now - lastSent < 600 || accumLen < minWindow) return;
-
-            // Merge accumulated buffers
-            const merged = new Float32Array(accumLen);
-            let offset = 0;
-            for (const buf of accumBuffers) { merged.set(buf, offset); offset += buf.length; }
-            accumBuffers = []; accumLen = 0;
-
-            const down = downsampleBuffer(merged, audioCtx.sampleRate, 16000);
-            const pcm16 = floatTo16BitPCM(down);
-            const b64 = bufToBase64(pcm16);
-            ws.send(JSON.stringify({ audio: b64 }));
-            lastSent = now;
+            for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+            const rms = Math.sqrt(sum / input.length) || 0;
+            lastAudioRms = (lastAudioRms * 0.8) + (rms * 0.2);
+            updateMicLevel(lastAudioRms);
         };
 
-        listening = true;
-        document.getElementById('toggle-listening').textContent = 'Stop Listening';
-        document.getElementById('toggle-listening').classList.add('listening');
-        document.getElementById('mic-status').textContent = 'Listening...';
-        const dot = document.getElementById('mic-dot');
-        if (dot) dot.classList.add('on');
-        addLog('system', 'Listening mode started', 'success');
+        if (!analysisCanvas) {
+            analysisCanvas = document.createElement('canvas');
+            analysisCanvas.width = 160;
+            analysisCanvas.height = 120;
+            analysisCtx2d = analysisCanvas.getContext('2d', { willReadFrequently: true });
+        }
+
+        analysisTimer = setInterval(analyzeAndSend, 2000);
+
+        sessionRunning = true;
+        startBtn && (startBtn.textContent = 'Stop');
+        sessionStatus && (sessionStatus.textContent = 'Running');
+        micStatus && (micStatus.textContent = 'Listening...');
+        micDot && micDot.classList.add('on');
+        statusText && (statusText.textContent = 'Session running');
+        addLog('system', 'Session started', 'success');
     } catch (err) {
-        addLog('audience', `Failed to start listening: ${err.message}`, 'error');
+        addLog('system', `Permission or device error: ${err.message}`, 'error');
+        statusText && (statusText.textContent = 'Permission denied or unavailable');
     }
 }
 
-async function stopListening() {
-    if (!listening) return;
+async function stopSession() {
+    if (!sessionRunning) return;
     try {
+        if (analysisTimer) clearInterval(analysisTimer);
         if (processorNode) processorNode.disconnect();
         if (sourceNode) sourceNode.disconnect();
         if (audioCtx) await audioCtx.close();
         if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
-        if (ws) try { ws.close(); } catch {}
     } finally {
-        audioCtx = null; mediaStream = null; sourceNode = null; processorNode = null; ws = null; listening = false; accumBuffers = []; accumLen = 0; lastSent = 0;
-        document.getElementById('toggle-listening').textContent = 'Start Listening';
-        document.getElementById('toggle-listening').classList.remove('listening');
-        document.getElementById('mic-status').textContent = 'Idle';
-        const dot = document.getElementById('mic-dot');
-        if (dot) dot.classList.remove('on');
+        analysisTimer = null; audioCtx = null; mediaStream = null; sourceNode = null; processorNode = null; lastAudioRms = 0;
         updateMicLevel(0);
-        addLog('system', 'Listening mode stopped', 'warning');
+        startBtn && (startBtn.textContent = 'Start');
+        sessionStatus && (sessionStatus.textContent = 'Idle');
+        micStatus && (micStatus.textContent = 'Idle');
+        micDot && micDot.classList.remove('on');
+        statusText && (statusText.textContent = 'Ready');
+        sessionRunning = false;
+        addLog('system', 'Session stopped', 'warning');
     }
 }
 
-document.getElementById('toggle-listening').onclick = async () => {
-    if (!listening) await startListening(); else await stopListening();
-};
+if (startBtn) startBtn.onclick = async () => { if (!sessionRunning) await startSession(); else await stopSession(); };
 
-// Audience Service Controls
-document.getElementById('get-latest-reaction').onclick = async () => {
-    addLog('user', 'Fetching latest audience reaction', 'info');
-    try {
-        const response = await fetch(`${AUDIENCE_SERVICE_URL}/latest`);
-        const data = await parseJsonResponse(response);
-        addLog('audience', `Latest reaction: ${data.reaction_type}`, 'success');
-        showModal('Latest Audience Reaction', data);
-    } catch (error) {
-        addLog('audience', `Error: ${error.message}`, 'error');
-        showModal('Error', { error: error.message });
+function getAverageBrightness(videoEl) {
+    if (!videoEl || !analysisCtx2d || videoEl.readyState < 2) return 0;
+    analysisCtx2d.drawImage(videoEl, 0, 0, analysisCanvas.width, analysisCanvas.height);
+    const { data } = analysisCtx2d.getImageData(0, 0, analysisCanvas.width, analysisCanvas.height);
+    let total = 0; let count = 0;
+    for (let i = 0; i < data.length; i += 16) { // sample every 4th pixel
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        total += (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        count++;
     }
-};
+    return count ? total / count : 0;
+}
 
-document.getElementById('get-reaction-history').onclick = async () => {
-    addLog('user', 'Fetching reaction history', 'info');
-    try {
-        const response = await fetch(`${AUDIENCE_SERVICE_URL}/history`);
-        const data = await parseJsonResponse(response);
-        addLog('audience', `History retrieved: ${data.count} reactions`, 'success');
-        showModal('Reaction History', data);
-    } catch (error) {
-        addLog('audience', `Error: ${error.message}`, 'error');
-        showModal('Error', { error: error.message });
-    }
-};
+function classifyReaction(rms, brightness) {
+    if (rms > 0.12) return 'clapping';
+    if (rms > 0.06 && brightness > 0.25) return 'laughing';
+    if (rms < 0.02) return 'silent';
+    return 'neutral';
+}
 
-document.getElementById('submit-reaction').onclick = async () => {
-    const reaction = document.getElementById('simulate-reaction').value;
-    addLog('user', `Simulating ${reaction} reaction`, 'info');
-
-    // Simulate by sending mock audio data
-    try {
-        const response = await fetch(`${AUDIENCE_SERVICE_URL}/analyze`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                audio_base64: btoa('mock-audio-data'),  // Mock data
-                format: 'pcm16',
-                sample_rate: 16000
-            })
-        });
-
-        const data = await parseJsonResponse(response);
-        addLog('audience', `Reaction simulated: ${data.reaction_type}`, 'success');
-        showModal('Simulated Reaction', data);
-    } catch (error) {
-        addLog('audience', `Error: ${error.message}`, 'error');
-        showModal('Error', { error: error.message });
-    }
-};
-
-// Joke Service Controls
-document.getElementById('generate-joke').onclick = async () => {
-    const reaction = document.getElementById('joke-reaction').value;
-    const theme = document.getElementById('joke-theme').value || null;
-
-    addLog('user', `Generating joke for ${reaction} audience`, 'info');
+async function analyzeAndSend() {
+    const brightness = getAverageBrightness(cameraPreview);
+    const reaction = classifyReaction(lastAudioRms, brightness);
+    const payload = {
+        reaction_type: reaction,
+        audio_rms: Number(lastAudioRms.toFixed(4)),
+        video_brightness: Number(brightness.toFixed(3)),
+        ts: new Date().toISOString()
+    };
 
     try {
-        const response = await fetch(`${JOKE_SERVICE_URL}/generate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                audience_reaction: reaction,
-                theme: theme,
-                include_audio: false  // Don't transfer large audio in frontend
-            })
-        });
-
-        const data = await parseJsonResponse(response);
-        addLog('joke', `Joke: ${data.text}`, 'success');
-        showModal('Generated Joke', data);
-    } catch (error) {
-        addLog('joke', `Error: ${error.message}`, 'error');
-        showModal('Error', { error: error.message });
+        const res = await sendAnalysisToAPI(payload);
+        const conf = Math.round((res.confidence || 0.75) * 100);
+        micStatus && (micStatus.textContent = `Last: ${reaction} (${conf}%)`);
+        addLog('analyzer', `Reaction: ${reaction} (conf ${conf}%) | rms ${payload.audio_rms} | b ${payload.video_brightness}`, 'info');
+    } catch (err) {
+        addLog('analyzer', `Send failed: ${err.message}`, 'error');
     }
-};
+}
 
-document.getElementById('generate-joke-auto').onclick = async () => {
-    const theme = document.getElementById('joke-theme').value || null;
-
-    addLog('user', 'Auto-generating joke (fetching audience reaction)', 'info');
-
-    try {
-        const url = new URL(`${JOKE_SERVICE_URL}/generate/auto`);
-        if (theme) url.searchParams.append('theme', theme);
-        url.searchParams.append('include_audio', 'false');
-
-        const response = await fetch(url, { method: 'POST' });
-        const data = await parseJsonResponse(response);
-        addLog('joke', `Auto-joke: ${data.text}`, 'success');
-        showModal('Auto-Generated Joke', data);
-    } catch (error) {
-        addLog('joke', `Error: ${error.message}`, 'error');
-        showModal('Error', { error: error.message });
+async function sendAnalysisToAPI(payload) {
+    if (!USE_MOCK_API) {
+        const url = `${OPENAI_COMPAT_API_BASE}/analyze`;
+        const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.json();
     }
-};
-
-document.getElementById('get-stats').onclick = async () => {
-    addLog('user', 'Fetching performance statistics', 'info');
-    try {
-        const response = await fetch(`${JOKE_SERVICE_URL}/stats`);
-        const data = await parseJsonResponse(response);
-        addLog('joke', `Stats: ${data.total_jokes} jokes, ${(data.engagement_rate * 100).toFixed(1)}% engagement`, 'success');
-        showModal('Performance Statistics', data);
-    } catch (error) {
-        addLog('joke', `Error: ${error.message}`, 'error');
-        showModal('Error', { error: error.message });
-    }
-};
-
-document.getElementById('reset-generator').onclick = async () => {
-    if (!confirm('Are you sure you want to reset the generator?')) return;
-
-    addLog('user', 'Resetting joke generator', 'info');
-    try {
-        const response = await fetch(`${JOKE_SERVICE_URL}/reset`, { method: 'POST' });
-        const data = await parseJsonResponse(response);
-        addLog('joke', 'Generator reset successfully', 'success');
-        showModal('Reset', data);
-    } catch (error) {
-        addLog('joke', `Error: ${error.message}`, 'error');
-        showModal('Error', { error: error.message });
-    }
-};
-
-// Auto Mode
-document.getElementById('start-auto-mode').onclick = () => {
-    if (autoModeRunning) return;
-
-    autoModeRunning = true;
-    document.getElementById('start-auto-mode').disabled = true;
-    document.getElementById('stop-auto-mode').disabled = false;
-
-    addLog('system', 'Starting auto performance mode', 'success');
-
-    let jokeCount = 0;
-    const reactions = ['laughing', 'neutral', 'silent', 'laughing'];
-
-    autoModeInterval = setInterval(async () => {
-        const reaction = reactions[jokeCount % reactions.length];
-
-        try {
-            // Simulate audience reaction
-            await fetch(`${AUDIENCE_SERVICE_URL}/analyze`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    audio_base64: btoa(`mock-reaction-${reaction}`),
-                    format: 'pcm16',
-                    sample_rate: 16000
-                })
-            });
-
-            // Generate joke
-            const response = await fetch(`${JOKE_SERVICE_URL}/generate/auto`, {
-                method: 'POST'
-            });
-
-            const data = await response.json();
-            jokeCount++;
-
-            document.getElementById('auto-mode-status').innerHTML = `
-                <strong>Running...</strong><br>
-                Jokes delivered: ${jokeCount}<br>
-                Last joke: ${data.text.substring(0, 60)}...
-            `;
-        } catch (error) {
-            addLog('auto-mode', `Error: ${error.message}`, 'error');
-        }
-    }, 10000);  // Every 10 seconds
-};
-
-document.getElementById('stop-auto-mode').onclick = () => {
-    if (!autoModeRunning) return;
-
-    autoModeRunning = false;
-    clearInterval(autoModeInterval);
-
-    document.getElementById('start-auto-mode').disabled = false;
-    document.getElementById('stop-auto-mode').disabled = true;
-
-    addLog('system', 'Auto performance mode stopped', 'warning');
-    document.getElementById('auto-mode-status').innerHTML = 'Stopped';
-};
+    return await new Promise((resolve) => {
+        setTimeout(() => {
+            resolve({ reaction_type: payload.reaction_type, confidence: 0.6 + Math.random() * 0.4 });
+        }, 150);
+    });
+}
 
 // Initial log
-addLog('system', 'AI Stand-up Comedy Agent Debug Console initialized', 'success');
-addLog('system', `Audience Service: ${AUDIENCE_SERVICE_URL}`, 'info');
-addLog('system', `Joke Service: ${JOKE_SERVICE_URL}`, 'info');
+addLog('system', 'Cringe-based Reinforcement Learning UI initialized', 'success');

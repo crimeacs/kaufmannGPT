@@ -18,7 +18,7 @@
 }
 
 body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: 'MS Sans Serif Fallback', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     background: var(--bg-dark);
     color: var(--text-light);
     height: 100vh;
@@ -354,3 +354,209 @@ button.listening { background-color: var(--warning-color); color: #09131f; }
 ::-webkit-scrollbar-thumb:hover {
     background: var(--border-color);
 }
+
+/*  Win95 Theme Additions  */
+.win95-desktop {
+    background: #008080;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    padding: 16px;
+}
+
+.window {
+    background: #c0c0c0;
+    color: #000;
+    min-width: 960px;
+    max-width: 1200px;
+    width: 96vw;
+    height: 92vh;
+    max-height: 92vh;
+    display: flex;
+    flex-direction: column;
+    border: 2px solid #c0c0c0;
+    box-shadow:
+        inset -1px -1px #808080,
+        inset 1px 1px #ffffff,
+        inset -2px -2px #000000,
+        inset 2px 2px #dfdfdf,
+        4px 4px 0 rgba(0,0,0,0.25);
+}
+
+.title-bar {
+    background: #000080;
+    color: #fff;
+    padding: 4px 6px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.title-bar-text {
+    font-weight: bold;
+    letter-spacing: 0.2px;
+}
+
+.title-bar-controls button {
+    width: 16px;
+    height: 16px;
+    margin-left: 4px;
+    background: #c0c0c0;
+    border: 2px solid #c0c0c0;
+    border-top-color: #ffffff;
+    border-left-color: #ffffff;
+    border-right-color: #808080;
+    border-bottom-color: #808080;
+    box-shadow: inset -1px -1px #808080, inset 1px 1px #ffffff;
+}
+.title-bar-controls button:active {
+    border-top-color: #808080;
+    border-left-color: #808080;
+    border-right-color: #ffffff;
+    border-bottom-color: #ffffff;
+}
+
+.window-body {
+    padding: 12px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.status-bar-95 {
+    padding: 4px 8px;
+    background: #c0c0c0;
+    border-top: 2px solid #c0c0c0;
+    box-shadow: inset -1px -1px #808080, inset 1px 1px #ffffff;
+}
+
+.subtitle {
+    margin-bottom: 8px;
+    color: #000;
+}
+
+.columns {
+    display: grid;
+    grid-template-columns: 420px 1fr;
+    gap: 12px;
+    height: 100%;
+}
+
+.left-pane,
+.right-pane {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.group {
+    border: 2px solid #c0c0c0;
+    padding: 16px 8px 8px;
+    position: relative;
+    box-shadow: inset -1px -1px #808080, inset 1px 1px #ffffff;
+}
+
+.group legend {
+    padding: 0 6px;
+    position: absolute;
+    top: -10px;
+    left: 10px;
+    background: #c0c0c0;
+    color: #000;
+    display: inline-block;
+}
+
+.field-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.session-status { color: #000; }
+
+.btn-95 {
+    background: #c0c0c0;
+    color: #000;
+    border: 2px solid #c0c0c0;
+    border-top-color: #ffffff;
+    border-left-color: #ffffff;
+    border-right-color: #808080;
+    border-bottom-color: #808080;
+    padding: 4px 12px;
+    line-height: 1.2;
+    min-height: 24px;
+    position: relative;
+    box-shadow: inset -1px -1px #dfdfdf, inset 1px 1px #ffffff;
+    cursor: pointer;
+}
+
+.btn-95:hover { background: #dcdcdc; }
+
+.btn-95:active {
+    border-top-color: #808080;
+    border-left-color: #808080;
+    border-right-color: #ffffff;
+    border-bottom-color: #ffffff;
+    box-shadow: inset 1px 1px #dfdfdf, inset -1px -1px #ffffff;
+    transform: translate(1px, 1px);
+}
+
+.btn-95:focus { outline: none; }
+.btn-95:focus::after {
+    content: '';
+    position: absolute;
+    left: 3px; right: 3px; top: 3px; bottom: 3px;
+    border: 1px dotted #000;
+    pointer-events: none;
+}
+
+.btn-95.primary { background: #d4d0c8; }
+.btn-95:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    color: #6d6d6d;
+    text-shadow: 1px 1px #ffffff;
+    transform: none;
+}
+
+.log-controls-95 { display: flex; gap: 6px; margin-bottom: 6px; }
+
+/* Override dark theme for logs inside Win95 window */
+#main-window .logs {
+    background: #ffffff;
+    color: #000000;
+    border: 2px solid #c0c0c0;
+    box-shadow: inset -1px -1px #808080, inset 1px 1px #ffffff;
+    padding: 8px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.right-pane .group {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+/* Camera preview */
+.camera-panel { margin-top: 10px; }
+.camera-frame {
+    background: #000;
+    border: 2px solid #c0c0c0;
+    box-shadow: inset -1px -1px #808080, inset 1px 1px #ffffff;
+    width: 100%;
+    aspect-ratio: 4/3;
+    overflow: hidden;
+}
+
+#camera-preview {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.camera-hint { margin-top: 4px; font-size: 12px; color: #000; }
+
+/* Mic widget tweaks inside Win95 window */
+#main-window .mic-indicator { background: #ffffff; border: 1px solid #808080; }
+#main-window .mic-status { color: #000; }

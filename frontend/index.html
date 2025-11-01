@@ -3,106 +3,77 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Stand-up Comedy Agent - Debug Console</title>
+    <title>Cringe-based Reinforcement Learning</title>
     <link rel="stylesheet" href="/style.css">
-</head>
+    <meta name="color-scheme" content="light only">
+    <meta name="description" content="Stand-up comic who reacts">
+    <link rel="icon" href="data:,">
+    <!-- Optional: 98.css could be used, but we ship our own lite Win95 styles in style.css -->
+    <!-- <link rel="stylesheet" href="https://unpkg.com/98.css" /> -->
+    <style>
+        /* Minimal inline font fallback to enhance Win95 vibe if system fonts differ */
+        @font-face { font-family: 'MS Sans Serif Fallback'; src: local('Arial'); }
+    </style>
+    </head>
 <body>
-    <header>
-        <h1>🎭 AI Stand-up Comedy Agent</h1>
-        <div class="status-bar">
-            <div class="service-status">
-                <span class="status-dot" id="audience-status"></span>
-                <span>Audience Service</span>
-            </div>
-            <div class="service-status">
-                <span class="status-dot" id="joke-status"></span>
-                <span>Joke Service</span>
-            </div>
-        </div>
-    </header>
-
-    <main>
-        <aside class="control-panel">
-            <h2>Control Panel</h2>
-
-            <!-- Audience Service Controls -->
-            <section class="control-section">
-                <h3>👥 Audience Service</h3>
-                <div class="button-group">
-                    <button id="get-latest-reaction" class="btn-primary">Get Latest Reaction</button>
-                    <button id="get-reaction-history" class="btn-secondary">View History</button>
+    <div class="win95-desktop">
+        <div class="window" id="main-window">
+            <div class="title-bar">
+                <div class="title-bar-text">Cringe-based Reinforcement Learning</div>
+                <div class="title-bar-controls">
+                    <button aria-label="Minimize" disabled></button>
+                    <button aria-label="Maximize" disabled></button>
+                    <button aria-label="Close" disabled></button>
                 </div>
-                <div class="form-group">
-                    <label>Listening Mode:</label>
-                    <div class="mic-widget">
-                        <button id="toggle-listening" class="btn-success">Start Listening</button>
-                        <div class="mic-indicator">
-                            <div id="mic-level" class="mic-level" style="width:0%"></div>
-                        </div>
-                        <div class="mic-right">
-                            <span class="mic-dot" id="mic-dot" title="Streaming"></span>
-                            <span id="mic-status" class="mic-status">Idle</span>
-                        </div>
+            </div>
+            <div class="window-body">
+                <p class="subtitle">Stand-up comic who reacts</p>
+                <div class="columns">
+                    <div class="left-pane">
+                        <fieldset class="group">
+                            <legend>Session</legend>
+                            <p class="help-text-95">To begin, allow microphone access and point your camera at the crowd.</p>
+                            <div class="field-row">
+                                <button id="start-session" class="btn-95 primary">Start</button>
+                                <span id="session-status" class="session-status">Idle</span>
+                            </div>
+                            <div class="mic-widget">
+                                <div class="mic-left">
+                                    <span>Mic level</span>
+                                </div>
+                                <div class="mic-indicator">
+                                    <div id="mic-level" class="mic-level" style="width:0%"></div>
+                                </div>
+                                <div class="mic-right">
+                                    <span class="mic-dot" id="mic-dot" title="Audio streaming indicator"></span>
+                                    <span id="mic-status" class="mic-status">Idle</span>
+                                </div>
+                            </div>
+                            <div class="camera-panel">
+                                <div class="camera-frame">
+                                    <video id="camera-preview" autoplay playsinline muted></video>
+                                </div>
+                                <div class="camera-hint">Tip: Point your camera toward the audience.</div>
+                            </div>
+                        </fieldset>
+                    </div>
+                    <div class="right-pane">
+                        <fieldset class="group">
+                            <legend>Real-Time Logs</legend>
+                            <div class="log-controls-95">
+                                <button id="clear-logs" class="btn-95">Clear</button>
+                                <button id="toggle-autoscroll" class="btn-95">Auto-scroll: ON</button>
+                            </div>
+                            <div id="logs-container" class="logs"></div>
+                        </fieldset>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label>Simulate Reaction:</label>
-                    <select id="simulate-reaction">
-                        <option value="laughing">😂 Laughing</option>
-                        <option value="neutral">😐 Neutral</option>
-                        <option value="silent">🤐 Silent</option>
-                        <option value="clapping">👏 Clapping</option>
-                    </select>
-                    <button id="submit-reaction" class="btn-primary">Submit</button>
-                </div>
-            </section>
-
-            <!-- Joke Service Controls -->
-            <section class="control-section">
-                <h3>🎤 Joke Service</h3>
-                <div class="form-group">
-                    <label>Audience Reaction:</label>
-                    <select id="joke-reaction">
-                        <option value="laughing">😂 Laughing</option>
-                        <option value="neutral" selected>😐 Neutral</option>
-                        <option value="silent">🤐 Silent</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Theme (optional):</label>
-                    <input type="text" id="joke-theme" placeholder="e.g., AI, technology" />
-                </div>
-                <div class="button-group">
-                    <button id="generate-joke" class="btn-primary">Generate Joke</button>
-                    <button id="generate-joke-auto" class="btn-success">Auto-Generate</button>
-                </div>
-                <div class="button-group">
-                    <button id="get-stats" class="btn-secondary">Get Stats</button>
-                    <button id="reset-generator" class="btn-danger">Reset</button>
-                </div>
-            </section>
-
-            <!-- Auto Performance Mode -->
-            <section class="control-section">
-                <h3>🤖 Auto Mode</h3>
-                <p class="help-text">Continuous performance with random reactions</p>
-                <button id="start-auto-mode" class="btn-success">Start Auto Mode</button>
-                <button id="stop-auto-mode" class="btn-danger" disabled>Stop Auto Mode</button>
-                <div id="auto-mode-status"></div>
-            </section>
-        </aside>
-
-        <section class="log-panel">
-            <div class="log-header">
-                <h2>Real-Time Logs</h2>
-                <div class="log-controls">
-                    <button id="clear-logs" class="btn-secondary">Clear</button>
-                    <button id="toggle-autoscroll" class="btn-secondary">Auto-scroll: ON</button>
-                </div>
             </div>
-            <div id="logs-container" class="logs"></div>
-        </section>
-    </main>
+            <div class="status-bar-95">
+                <p id="status-text">Ready</p>
+            </div>
+        </div>
+    </div>
 
     <!-- Response Modal -->
     <div id="response-modal" class="modal">
@@ -110,7 +81,7 @@
             <span class="modal-close">&times;</span>
             <h3 id="modal-title">Response</h3>
             <pre id="modal-body"></pre>
-            <button id="modal-copy" class="btn-secondary">Copy to Clipboard</button>
+            <button id="modal-copy" class="btn-95">Copy to Clipboard</button>
         </div>
     </div>
 
