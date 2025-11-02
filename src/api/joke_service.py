@@ -122,7 +122,7 @@ async def fetch_latest_audience_reaction() -> Dict[str, Any]:
             async with session.get(f"{AUDIENCE_SERVICE_URL}/latest", timeout=aiohttp.ClientTimeout(total=5)) as response:
                 if response.status == 200:
                     data = await response.json()
-                    log_msg = f"Received audience reaction: {data.get('reaction_type', 'unknown')}"
+                    log_msg = f"Received audience reaction: {data.get('reaction_type', data.get('verdict', 'unknown'))}"
                     logger.info(log_msg)
                     await log_queue.put({"service": "joke", "message": log_msg, "level": "info"})
                     return data
@@ -130,17 +130,19 @@ async def fetch_latest_audience_reaction() -> Dict[str, Any]:
                     log_msg = f"Audience service returned status {response.status}"
                     logger.warning(log_msg)
                     await log_queue.put({"service": "joke", "message": log_msg, "level": "warning"})
+                    # Fallback when no reactions yet
+                    return {"verdict": "uncertain", "rationale": "no reactions yet", "reaction_type": "neutral"}
 
     except asyncio.TimeoutError:
         log_msg = "Timeout fetching audience reaction"
         logger.warning(log_msg)
         await log_queue.put({"service": "joke", "message": log_msg, "level": "warning"})
-        raise TimeoutError(log_msg)
+        return {"verdict": "uncertain", "rationale": "timeout", "reaction_type": "neutral"}
     except Exception as e:
         log_msg = f"Error fetching audience reaction: {e}"
         logger.error(log_msg)
         await log_queue.put({"service": "joke", "message": log_msg, "level": "error"})
-        raise
+        return {"verdict": "uncertain", "rationale": "error", "reaction_type": "neutral"}
 
 
 @app.on_event("startup")
@@ -264,7 +266,18 @@ async def generate_joke_auto(theme: Optional[str] = None, include_audio: bool = 
     try:
         # Fetch latest audience reaction
         audience_data = await fetch_latest_audience_reaction()
-        audience_reaction = audience_data.get('reaction_type', 'neutral')
+        # Map new analyzer schema to a short reaction label
+        verdict = audience_data.get('verdict')
+        if verdict == 'hit':
+            audience_reaction = 'big laugh / applause'
+        elif verdict == 'mixed':
+            audience_reaction = 'small laugh / chatter'
+        elif verdict == 'miss':
+            audience_reaction = 'silence / groan'
+        elif verdict == 'uncertain':
+            audience_reaction = 'confusion'
+        else:
+            audience_reaction = audience_data.get('reaction_type', 'neutral')
 
         log_msg = f"Auto-generating joke for {audience_reaction} audience"
         logger.info(log_msg)
@@ -276,7 +289,8 @@ async def generate_joke_auto(theme: Optional[str] = None, include_audio: bool = 
         # Generate joke
         joke_data = await generator_instance.generate_and_deliver_joke(
             audience_reaction=audience_reaction,
-            context=theme
+            context=theme,
+            audience_context=audience_data
         )
 
         log_msg = f"Auto-joke generated: {joke_data['text'][:50]}..."

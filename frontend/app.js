@@ -182,6 +182,22 @@ async function startSession() {
             connectWSAnalyze();
         }
 
+        // Fire opener from joke generator (text only)
+        try {
+            fetch(`${JOKE_API_BASE}/generate/auto?include_audio=true`, { method: 'POST' })
+                .then(r => r.json())
+                .then(j => {
+                    if (j && j.text) {
+                        addLog('agent', j.text, 'info');
+                        showModal && showModal('Agent Opener', j.text);
+                    }
+                    if (j && j.audio_base64) {
+                        playPcm16Base64(j.audio_base64, 24000);
+                    }
+                })
+                .catch(() => {});
+        } catch (_) {}
+
         sessionRunning = true;
         startBtn && (startBtn.textContent = 'Stop');
         sessionStatus && (sessionStatus.textContent = 'Running');
@@ -338,6 +354,46 @@ function u8ToBase64(u8) {
         binary += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
     }
     return btoa(binary);
+}
+
+// Audio helpers: wrap PCM16 24k mono into WAV for playback
+function pcm16ToWavBytes(pcmBytes, sampleRate = 24000, numChannels = 1) {
+    const blockAlign = numChannels * 2;
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = pcmBytes.length;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+    let p = 0;
+    function writeStr(s) { for (let i = 0; i < s.length; i++) view.setUint8(p++, s.charCodeAt(i)); }
+    function write32(v) { view.setUint32(p, v, true); p += 4; }
+    function write16(v) { view.setUint16(p, v, true); p += 2; }
+    writeStr('RIFF');
+    write32(36 + dataSize);
+    writeStr('WAVE');
+    writeStr('fmt ');
+    write32(16);
+    write16(1);
+    write16(numChannels);
+    write32(sampleRate);
+    write32(byteRate);
+    write16(blockAlign);
+    write16(16);
+    writeStr('data');
+    write32(dataSize);
+    new Uint8Array(buffer, 44).set(pcmBytes);
+    return new Uint8Array(buffer);
+}
+
+async function playPcm16Base64(b64, sampleRate = 24000) {
+    try {
+        const pcmBytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        const wavBytes = pcm16ToWavBytes(pcmBytes, sampleRate, 1);
+        const blob = new Blob([wavBytes], { type: 'audio/wav' });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.play().catch(() => {});
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (_) {}
 }
 
 // Initial log

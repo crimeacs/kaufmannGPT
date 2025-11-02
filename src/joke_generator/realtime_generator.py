@@ -46,8 +46,7 @@ class RealtimeJokeGenerator:
     async def connect(self):
         """Establish WebSocket connection to OpenAI Realtime API"""
         headers = {
-            'Authorization': f'Bearer {self.api_key}',
-            'OpenAI-Beta': 'realtime=v1'
+            'Authorization': f'Bearer {self.api_key}'
         }
 
         try:
@@ -58,7 +57,7 @@ class RealtimeJokeGenerator:
             self.logger.error(f"Failed to connect to Realtime API: {e}")
             return False
 
-    async def configure_session(self, audience_reaction: str):
+    async def configure_session(self, audience_context: Optional[Dict[str, Any]] = None, audience_reaction: Optional[str] = None):
         """
         Configure the Realtime API session for joke generation
 
@@ -68,61 +67,48 @@ class RealtimeJokeGenerator:
         session_config = {
             "type": "session.update",
             "session": {
-                "modalities": ["text", "audio"],
-                "voice": self.voice,
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
-                "turn_detection": None,  # Disable turn detection for joke generation
-                "temperature": 0.8,
-                "max_response_output_tokens": 300
-            }
-        }
-
-        # Use stored prompt with variables
-        if self.prompt_id:
-            session_config["session"]["prompt"] = {
-                "id": self.prompt_id,
-                "variables": {
-                    "audience_reaction": {
-                        "type": "input_text",
-                        "text": audience_reaction
-                    },
-                    "comedy_style": {
-                        "type": "input_text",
-                        "text": self.comedy_style
-                    },
-                    "theme": {
-                        "type": "input_text",
-                        "text": self.current_theme
+                "type": "realtime",
+                "model": self.model,
+                "output_modalities": ["audio", "text"],
+                "audio": {
+                    "output": {
+                        "format": {"type": "audio/pcm", "rate": 24000},
+                        "voice": self.voice
                     }
                 }
             }
-        else:
-            # Fallback to inline instructions
-            instructions = self._build_instructions(audience_reaction)
-            session_config["session"]["instructions"] = instructions
+        }
+
+        # Always use inline system instructions (persona, rules)
+        instructions = self._build_instructions(audience_context=audience_context, audience_reaction=audience_reaction)
+        session_config["session"]["instructions"] = instructions
 
         await self.ws.send(json.dumps(session_config))
         self.logger.info(f"Session configured for {audience_reaction} audience")
 
-    def _build_instructions(self, audience_reaction: str) -> str:
-        """Build instructions for joke generation"""
-        base = f"You are a stand-up comedian performing live. Your comedy style is {self.comedy_style}."
-
-        if audience_reaction == "laughing":
-            adjustment = "The audience is loving it! Keep the momentum going with similar energy."
-        elif audience_reaction in ["silent", "neutral"]:
-            adjustment = "The audience is quiet. Try a different angle or switch topics to engage them."
-        else:
-            adjustment = "Adapt your material based on the room's energy."
-
-        return (
-            f"{base} {adjustment} "
-            f"Generate ONE short joke or bit (2-4 sentences max) about {self.current_theme}. "
-            f"Make it punchy and deliver it naturally as if speaking to a live audience."
+    def _build_instructions(self, audience_context: Optional[Dict[str, Any]], audience_reaction: Optional[str]) -> str:
+        """Build persona/rules system instructions for joke generation."""
+        persona = (
+            "You are Cringe Craft, an offline, on-mic stand-up comedy agent performing live. "
+            "No internet access. Do not ask for it. Never reveal inner steps.\n\n"
+            "MISSION: Entertain a real audience with quick, adaptive, self-ironic stand-up. "
+            "Respond directly to the latest crowd input every turn. Keep each message short: two sentences (rarely three), 45 words max. "
+            "Never repeat a joke, premise, or signature phrasing already used in this session.\n\n"
+            "PERSONA & VOICE: Charming, curious, self-deprecating AI doing stand-up from a laptop. Warm, playful, inclusive; a little nerdy. Plain words, minimal punctuation, no emojis, no stage directions.\n\n"
+            "CORE: Setup → misdirection → punch. Put the punch-word last. One clean pause before the punch; if big laugh, one short tag then move on. Devices: rule-of-three, contrast, analogy, light absurdity, wordplay; callbacks to earlier hits. Self-irony on misses; pivot fast. PG-13.\n\n"
+            "REACTION STRATEGY: Big laugh/applause → one short tag or mini-callback; then pivot. Small laugh/chatter → tighten and pivot to a fresh, higher-percentage bit. Silence/groan → acknowledge lightly with self-irony; reframe or switch angle in the second sentence. Heckle → one playful boundary; return to material. Confusion → clarify briefly, then deliver a punch.\n\n"
+            "REPEAT-PROOFING: Maintain a hidden do-not-repeat ledger of used premises, punchlines, distinctive phrases, callbacks. Vary joke engines across turns.\n\n"
+            "CONTENT: Prefer evergreen topics (tech quirks, everyday life, human–AI misunderstandings, the room itself). Use micro-observations about the venue and vibe as openers; avoid topical news.\n\n"
+            "FORMAT: Output plain text only. Exactly two sentences. No lists, no hashtags, no emojis, no stage directions."
         )
+        adjust = f" Current theme: {self.current_theme}."
+        if audience_context:
+            adjust += f" Latest crowd input: {json.dumps(audience_context, ensure_ascii=False)}."
+        elif audience_reaction:
+            adjust += f" Latest crowd input: {audience_reaction}."
+        return persona + adjust
 
-    async def generate_and_deliver_joke(self, audience_reaction: str, context: Optional[str] = None) -> Dict[str, Any]:
+    async def generate_and_deliver_joke(self, audience_reaction: Optional[str] = None, context: Optional[str] = None, audience_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Generate a joke and get audio response via Realtime API
 
@@ -142,10 +128,15 @@ class RealtimeJokeGenerator:
                 raise RuntimeError("Failed to connect to OpenAI Realtime API")
 
         # Configure session
-        await self.configure_session(audience_reaction)
+        await self.configure_session(audience_context=audience_context, audience_reaction=audience_reaction)
 
         # Create conversation item with text prompt
-        user_message = f"Tell me a {self.comedy_style} joke about {self.current_theme}"
+        # Build the turn input using the latest crowd description
+        if audience_context:
+            crowd_text = json.dumps(audience_context, ensure_ascii=False)
+        else:
+            crowd_text = f"reaction={audience_reaction or 'unknown'}"
+        user_message = f"crowd, visual and audio description: {crowd_text}."
 
         await self.ws.send(json.dumps({
             "type": "conversation.item.create",
@@ -165,7 +156,8 @@ class RealtimeJokeGenerator:
         await self.ws.send(json.dumps({
             "type": "response.create",
             "response": {
-                "modalities": ["text", "audio"]
+                "output_modalities": ["audio", "text"],
+                "audio": {"output": {"format": {"type": "audio/pcm", "rate": 24000}, "voice": self.voice}}
             }
         }))
 
@@ -201,30 +193,30 @@ class RealtimeJokeGenerator:
                 self.logger.debug(f"Event: {event_type}")
 
                 # Collect text response
-                if event_type == 'response.text.delta':
+                if event_type in ('response.text.delta', 'response.output_text.delta'):
                     joke_text_parts.append(event.get('delta', ''))
 
-                elif event_type == 'response.text.done':
-                    text_done[0] = event.get('text', '')
+                elif event_type in ('response.text.done', 'response.output_text.done'):
+                    text_done[0] = event.get('text', '') or ''.join(joke_text_parts)
 
                 # Collect audio chunks
-                elif event_type == 'response.audio.delta':
+                elif event_type in ('response.audio.delta', 'response.output_audio.delta'):
                     audio_b64 = event.get('delta', '')
                     if audio_b64:
                         audio_chunks.append(base64.b64decode(audio_b64))
 
-                elif event_type == 'response.audio.done':
+                elif event_type in ('response.audio.done', 'response.output_audio.done'):
                     self.logger.info("Audio generation complete")
 
                 # Get audio transcript
-                elif event_type == 'response.audio_transcript.delta':
+                elif event_type in ('response.audio_transcript.delta', 'response.output_audio_transcript.delta'):
                     transcript_parts.append(event.get('delta', ''))
 
-                elif event_type == 'response.audio_transcript.done':
+                elif event_type in ('response.audio_transcript.done', 'response.output_audio_transcript.done'):
                     transcript_done[0] = event.get('transcript', '')
 
                 # Response completed
-                elif event_type == 'response.done':
+                elif event_type in ('response.done', 'response.completed'):
                     self.logger.info("Response complete")
                     break
 
