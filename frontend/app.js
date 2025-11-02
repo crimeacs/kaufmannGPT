@@ -33,6 +33,9 @@ let lastJokeAt = 0;
 let jokeSeq = 0;
 let activeJokeId = null;
 let fallbackTimeout = null;
+let latestAudioAnalysis = null;
+let latestVisualAnalysis = null;
+const DEBUG_CONTEXT = true;
 const POST_TTS_DELAY_MS = 900;
 const MIN_MESSAGE_GAP_MS = 1200;
 let speechQueue = [];
@@ -260,6 +263,7 @@ async function startSession() {
                     if (res.ok) {
                         const v = await res.json();
                         addLog('visual', `Verdict: ${v.visual_verdict} (conf ${Math.round(v.confidence*100)}%)`, 'info');
+                        latestVisualAnalysis = v;
                         timelineEvents.push({ type: 'visual', ts: Date.now(), payload: v });
                         if (timelineEvents.length > 500) timelineEvents.shift();
                     }
@@ -384,7 +388,8 @@ function connectWSAnalyze() {
                 const confPct = hasConf ? ` (${Math.round(msg.confidence * 100)}%)` : '';
                 micStatus && (micStatus.textContent = `Last: ${reaction}${confPct}`);
                 addLog('analyzer', verdict ? `WS: ${verdict}${confPct}` : `WS: ${reaction}${confPct}`, 'info');
-                maybeTriggerJoke(msg);
+                // cache latest analysis; next joke is triggered on audio end or fallback
+                latestAudioAnalysis = msg;
             } catch (e) {
                 addLog('analyzer', `WS parse: ${e.message}`, 'warning');
             }
@@ -528,6 +533,37 @@ function verdictToLabel(verdict) {
     return 'neutral';
 }
 
+function summarizeWindow(tsFromMs, tsToMs = Date.now()) {
+    const win = timelineEvents.filter(e => e.ts >= tsFromMs && e.ts <= tsToMs);
+    const audioCounts = {};
+    const visualCounts = {};
+    for (const e of win) {
+        if (e.type === 'audio') {
+            const v = (e.payload && (e.payload.verdict || e.payload.reaction_type)) || 'unknown';
+            audioCounts[v] = (audioCounts[v] || 0) + 1;
+        } else if (e.type === 'visual') {
+            const v = (e.payload && e.payload.visual_verdict) || 'unknown';
+            visualCounts[v] = (visualCounts[v] || 0) + 1;
+        }
+    }
+    return { audio_counts: audioCounts, visual_counts: visualCounts, window_ms: tsToMs - tsFromMs };
+}
+
+function buildJokeContext(baseAnalysis) {
+    const tail = timelineEvents.slice(-20);
+    const prev = lastJokeAt ? summarizeWindow(lastJokeAt) : null;
+    const audio_latest = latestAudioAnalysis || null;
+    const visual_latest = latestVisualAnalysis || null;
+    return {
+        prev_joke: lastJokeText ? { text: lastJokeText, ts: lastJokeAt } : null,
+        audio_latest,
+        visual_latest,
+        post_reactions: prev,
+        timeline_tail: tail,
+        analysis: baseAnalysis || null
+    };
+}
+
 function maybeTriggerJoke(analysis) {
     const now = Date.now();
     if (audioPlaying || jokeInFlight || (now - lastJokeTs) < JOKE_COOLDOWN_MS) return;
@@ -535,16 +571,24 @@ function maybeTriggerJoke(analysis) {
     lastJokeTs = Date.now();
     const includeAudio = true;
     const joke_id = ++jokeSeq; activeJokeId = joke_id;
+    const contextPayload = buildJokeContext(analysis);
+    const payload = { joke_id, context: contextPayload };
+    if (DEBUG_CONTEXT) {
+        try { addLog('context', `Sending context: ${JSON.stringify(payload)}`, 'info'); } catch (_) {}
+    }
     fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=${includeAudio}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...analysis, joke_id })
+        body: JSON.stringify(payload)
     })
         .then(r => r.json())
         .then(j => {
             if (j && j.joke_id !== activeJokeId) return;
             if (j && j.text) addLog('agent', j.text, 'info');
             if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
+            if (DEBUG_CONTEXT) {
+                try { addLog('context', `Response joke_id=${j && j.joke_id}`, 'info'); } catch (_) {}
+            }
             if (j && j.text) {
                 lastJokeText = j.text;
                 lastJokeAt = Date.now();
@@ -567,14 +611,22 @@ function scheduleFallback() {
         jokeInFlight = true;
         lastJokeTs = Date.now();
         const joke_id = ++jokeSeq; activeJokeId = joke_id;
+        const contextPayload = buildJokeContext(synthetic);
+        const payload = { joke_id, context: contextPayload };
+        if (DEBUG_CONTEXT) {
+            try { addLog('context', `Sending context: ${JSON.stringify(payload)}`, 'info'); } catch (_) {}
+        }
         fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=true`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...synthetic, joke_id })
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
         })
             .then(r => r.json())
             .then(j => {
                 if (j && j.joke_id !== activeJokeId) return;
                 if (j && j.text) addLog('agent', j.text, 'info');
                 if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
+                if (DEBUG_CONTEXT) {
+                    try { addLog('context', `Response joke_id=${j && j.joke_id}`, 'info'); } catch (_) {}
+                }
                 if (j && j.text) {
                     lastJokeText = j.text;
                     lastJokeAt = Date.now();
