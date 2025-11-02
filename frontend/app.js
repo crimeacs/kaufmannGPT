@@ -43,6 +43,12 @@ let speechQueue = [];
 let drainingSpeechQueue = false;
 let lastSpokenAt = 0;
 let currentAudioEl = null;
+// Reaction plot state
+let reactionSeries = [];
+let reactionCanvas = null;
+let reactionCtx = null;
+const REACTION_WINDOW_MS = 30000; // last 30s
+let reactionAnimationHandle = null;
 
 // Elements
 const logsContainer = document.getElementById('logs-container');
@@ -108,6 +114,7 @@ function connectServiceLogs(serviceName, url) {
 window.addEventListener('load', () => {
     connectServiceLogs('audience', `${OPENAI_COMPAT_API_BASE}/stream/logs`);
     connectServiceLogs('joke', `${JOKE_API_BASE}/stream/logs`);
+    initReactionPlot();
 });
 
 // Logging
@@ -116,14 +123,12 @@ function addLog(service, message, level = 'info') {
     const entry = document.createElement('div');
     entry.className = `log-entry ${level}`;
     const timestamp = new Date().toLocaleTimeString();
-    const styled = maybeRenderWin95Reaction(service, message);
     entry.innerHTML = `
         <div>
             <span class="timestamp">${timestamp}</span>
             <span class="service">${service}</span>
         </div>
-        <div class="message">${styled}
-        </div>
+        <div class="message">${escapeHtml(String(message))}</div>
     `;
     logsContainer.appendChild(entry);
     if (autoScrollEnabled) entry.scrollIntoView({ behavior: 'smooth' });
@@ -269,6 +274,7 @@ async function startSession() {
                         latestVisualAnalysis = v;
                         timelineEvents.push({ type: 'visual', ts: Date.now(), payload: v });
                         if (timelineEvents.length > 500) timelineEvents.shift();
+                        try { pushReaction('visual', v.visual_verdict, (v.confidence!=null ? v.confidence*100 : null), Date.now()); } catch(_){}
                     }
                 } catch (_) {}
             }, 3000);
@@ -393,7 +399,8 @@ function connectWSAnalyze() {
                 addLog('analyzer', verdict ? `WS: ${verdict}${confPct}` : `WS: ${reaction}${confPct}`, 'info');
                 // cache latest analysis and attempt immediate trigger if we're ready
                 latestAudioAnalysis = msg;
-                try { triggerIfReady(msg); } catch (_) {}
+                // push to reaction plot (audio)
+                try { pushReaction('audio', reaction, hasConf ? (msg.confidence * 100) : null, Date.now()); } catch(_){}
             } catch (e) {
                 addLog('analyzer', `WS parse: ${e.message}`, 'warning');
             }
@@ -637,6 +644,118 @@ function escapeHtml(str) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+// Reaction plot utilities
+function pushReaction(source, verdict, confidencePct, ts) {
+    reactionSeries.push({ ts, source, verdict: String(verdict || '').toLowerCase(), confidencePct: confidencePct == null ? null : Math.max(0, Math.min(100, Math.round(confidencePct))) });
+    // Trim old points periodically
+    const cutoff = Date.now() - REACTION_WINDOW_MS * 2;
+    if (reactionSeries.length > 1000) reactionSeries = reactionSeries.filter(p => p.ts >= cutoff);
+}
+
+function colorForVerdict(v) {
+    if (v === 'laughing' || v === 'hit') return '#178a17'; // green
+    if (v === 'enjoying' || v === 'mixed') return '#b36b00'; // warm
+    if (v === 'neutral') return '#666666'; // gray
+    if (v === 'miss' || v === 'silent' || v === 'silence') return '#a11a1a'; // red
+    if (v === 'uncertain' || v === 'unknown') return '#5a4da3'; // purple
+    return '#666666';
+}
+
+function yForVerdict(v, h) {
+    // 5 bands (0..4) from bottom to top
+    const map = {
+        'miss': 0, 'silent': 0, 'silence': 0,
+        'uncertain': 1, 'unknown': 1,
+        'neutral': 2,
+        'enjoying': 3, 'mixed': 3,
+        'laughing': 4, 'hit': 4,
+    };
+    const band = map[v] != null ? map[v] : 2;
+    const rows = 5;
+    const pad = 8;
+    const bandHeight = Math.max(1, (h - pad * 2) / (rows - 1));
+    return Math.round(h - pad - band * bandHeight);
+}
+
+function renderReactionPlot() {
+    if (!reactionCanvas || !reactionCtx) return;
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const cssW = reactionCanvas.clientWidth || 300;
+    const cssH = reactionCanvas.clientHeight || 96;
+    const needResize = reactionCanvas.width !== Math.floor(cssW * dpr) || reactionCanvas.height !== Math.floor(cssH * dpr);
+    if (needResize) {
+        reactionCanvas.width = Math.floor(cssW * dpr);
+        reactionCanvas.height = Math.floor(cssH * dpr);
+        reactionCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    const ctx = reactionCtx;
+    const w = cssW, h = cssH;
+    // background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+    // inner border
+    ctx.strokeStyle = '#808080';
+    ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+
+    const now = Date.now();
+    const windowMs = REACTION_WINDOW_MS;
+    // grid bands
+    ctx.strokeStyle = '#e0e0e0';
+    for (let i = 0; i < 5; i++) {
+        const y = yForVerdict(['miss','uncertain','neutral','enjoying','laughing'][i], h);
+        ctx.beginPath();
+        ctx.moveTo(0, y + 0.5);
+        ctx.lineTo(w, y + 0.5);
+        ctx.stroke();
+    }
+
+    // draw points
+    const points = reactionSeries.filter(p => p.ts >= now - windowMs);
+    const leftPad = 6, rightPad = 2;
+    for (const p of points) {
+        const x = leftPad + ((p.ts - (now - windowMs)) / windowMs) * (w - leftPad - rightPad);
+        const y = yForVerdict(p.verdict, h);
+        const color = colorForVerdict(p.verdict);
+        const alpha = p.confidencePct == null ? 0.8 : (0.4 + 0.6 * (p.confidencePct / 100));
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = color;
+        ctx.strokeStyle = '#000000';
+
+        if (p.source === 'visual') {
+            const s = 6; // square
+            ctx.fillRect(x - s/2, y - s/2, s, s);
+            ctx.globalAlpha = 1.0;
+            ctx.strokeRect(x - s/2, y - s/2, s, s);
+        } else {
+            const r = 3.5; // audio circle
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+            ctx.stroke();
+        }
+    }
+
+    // now marker
+    ctx.globalAlpha = 1.0;
+    ctx.strokeStyle = '#b0b0b0';
+    ctx.beginPath();
+    ctx.moveTo(w - rightPad - 0.5, 0);
+    ctx.lineTo(w - rightPad - 0.5, h);
+    ctx.stroke();
+
+    reactionAnimationHandle = requestAnimationFrame(renderReactionPlot);
+}
+
+function initReactionPlot() {
+    reactionCanvas = document.getElementById('reaction-canvas');
+    if (!reactionCanvas) return;
+    reactionCtx = reactionCanvas.getContext('2d');
+    if (reactionAnimationHandle) cancelAnimationFrame(reactionAnimationHandle);
+    renderReactionPlot();
+    window.addEventListener('resize', () => { if (reactionCanvas) renderReactionPlot(); });
 }
 
 function summarizeWindow(tsFromMs, tsToMs = Date.now()) {
