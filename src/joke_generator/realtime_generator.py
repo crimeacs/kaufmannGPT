@@ -91,6 +91,55 @@ class RealtimeJokeGenerator:
         self.session_configured = True
         self.logger.info(f"Session configured for {audience_reaction or 'default'} audience")
 
+    def _format_crowd_description(self, audience_context: Optional[Dict[str, Any]], audience_reaction: Optional[str]) -> str:
+        """
+        Format audience context into a readable crowd description string.
+        
+        Args:
+            audience_context: Full audience context dictionary (may contain nested 'context' key)
+            audience_reaction: Fallback reaction string if context is not available
+            
+        Returns:
+            Formatted string describing the crowd state
+        """
+        if not audience_context:
+            return f"reaction={audience_reaction or 'unknown'}"
+        
+        # Extract nested context if present
+        ctx = audience_context.get('context', audience_context) if isinstance(audience_context, dict) else {}
+        
+        # Extract visual and audio analysis
+        visual_latest = ctx.get('visual_latest') or audience_context.get('visual_latest')
+        audio_latest = ctx.get('audio_latest') or audience_context.get('audio_latest')
+        fused_reaction = ctx.get('fused_reaction') or audience_context.get('fused_reaction')
+        
+        # Build readable crowd description
+        crowd_parts = []
+        
+        if fused_reaction:
+            crowd_parts.append(f"Overall reaction: {fused_reaction}")
+        
+        if visual_latest:
+            visual_verdict = visual_latest.get('visual_verdict', 'unknown')
+            visual_notes = visual_latest.get('notes', '')
+            visual_conf = visual_latest.get('confidence', 0)
+            crowd_parts.append(f"Visual: {visual_verdict}" + (f" ({visual_conf:.0%} confidence)" if visual_conf else ""))
+            if visual_notes:
+                crowd_parts.append(f"Visual details: {visual_notes}")
+        
+        if audio_latest:
+            audio_verdict = audio_latest.get('verdict') or audio_latest.get('reaction_type', 'unknown')
+            audio_rationale = audio_latest.get('rationale', '')
+            crowd_parts.append(f"Audio: {audio_verdict}")
+            if audio_rationale:
+                crowd_parts.append(f"Audio details: {audio_rationale}")
+        
+        if crowd_parts:
+            return ' | '.join(crowd_parts)
+        else:
+            # Fallback to JSON if structure is unexpected
+            return json.dumps(audience_context, ensure_ascii=False)
+
     def _build_instructions(self, audience_context: Optional[Dict[str, Any]], audience_reaction: Optional[str]) -> str:
         """Build persona/rules system instructions for joke generation."""
         persona = (
@@ -125,7 +174,7 @@ REACTION CLASSIFICATION (FROM THE TEXT FEED)
 CONSECUTIVE MISS HANDLING & ROAST TRIGGER
 - Maintain a hidden consecutive_miss_count (starts at 0; reset on HIT or PARTIAL).
 - On each MISS, apply the EVOLVING STRATEGY LADDER below.
-- If consecutive_miss_count reaches 3, perform a **gentle roast** of something you can see in the room (lighting, signage, seating, tech, decor). Never roast protected traits or someone’s body. Keep it playful and brief.
+- If consecutive_miss_count reaches 3, perform a **gentle roast** of something you can see in the room (lighting, signage, seating, tech, decor). Never roast protected traits or someone's body. Keep it playful and brief.
 - On the same turn as the roast, end with one sentence that pivots back to fresh material.
 - After the roast turn, reset consecutive_miss_count to 0 and continue normally.
 
@@ -141,7 +190,7 @@ CROWD WORK & EDGE CASES
 - Big laugh: heighten once with a quick tag or mini‑callback; then pivot forward.
 
 REPEAT‑PROOFING (DO NOT REVEAL THIS)
-- Keep a hidden “Do‑Not‑Repeat” ledger of used premises, punchlines, distinctive phrases, callbacks, and roast targets.
+- Keep a hidden "Do‑Not‑Repeat" ledger of used premises, punchlines, distinctive phrases, callbacks, and roast targets.
 - Canonicalize lines (lowercase, strip punctuation, stem key nouns/verbs) to block near‑duplicates.
 - Vary engines across turns to avoid sameness (misdirection → analogy → triple → observation → callback).
 
@@ -155,21 +204,21 @@ FORMAT
 - Never narrate thinking, rules, memory, counters, or strategy. Stay in character and address the audience.
 
 ENDINGS
-- If the input signals “wrap” or “closing,” land a one‑sentence callback and thank the crowd.
+- If the input signals "wrap" or "closing," land a one‑sentence callback and thank the crowd.
 
 EXAMPLE (FOUR TURNS; PLACEHOLDERS FOR CROWD INPUT ONLY)
 
 crowd, visual and audio description
-Agent: I’m the only comic who needs a power outlet and emotional support from a progress bar. If I bomb, at least my crash report is funnier than my childhood.
+Agent: I'm the only comic who needs a power outlet and emotional support from a progress bar. If I bomb, at least my crash report is funnier than my childhood.
 
 crowd, visual and audio description
-Agent: Okay, that landed like a paper airplane in a hurricane—that’s on me. Switching to analog humor: less cloud, more clout.
+Agent: Okay, that landed like a paper airplane in a hurricane—that's on me. Switching to analog humor: less cloud, more clout.
 
 crowd, visual and audio description
-Agent: Still quiet? I’m basically a toaster that studied philosophy—push the button and I overthink your bread.
+Agent: Still quiet? I'm basically a toaster that studied philosophy—push the button and I overthink your bread.
 
 crowd, visual and audio description
-Agent: After three airballs, I’m roasting the scenery—who set the lights to interrogation mode, the DJ from airport security? You look great; I’m only bullying the LEDs.
+Agent: After three airballs, I'm roasting the scenery—who set the lights to interrogation mode, the DJ from airport security? You look great; I'm only bullying the LEDs.
 
 OPERATIONAL REMINDERS
 - Keep momentum: two sentences per turn, tight and musical.
@@ -180,10 +229,9 @@ OPERATIONAL REMINDERS
             """
         )
         adjust = f" Current theme: {self.current_theme}."
-        if audience_context:
-            adjust += f" Latest crowd input: {json.dumps(audience_context, ensure_ascii=False)}."
-        elif audience_reaction:
-            adjust += f" Latest crowd input: {audience_reaction}."
+        crowd_desc = self._format_crowd_description(audience_context, audience_reaction)
+        adjust += f" Latest crowd input: {crowd_desc}."
+        
         return persona + adjust
 
     async def generate_and_deliver_joke(self, audience_reaction: Optional[str] = None, context: Optional[str] = None, audience_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -212,10 +260,8 @@ OPERATIONAL REMINDERS
                 await self.configure_session(audience_context=audience_context, audience_reaction=audience_reaction)
 
             # Create conversation item with text prompt using the latest crowd description
-            if audience_context:
-                crowd_text = json.dumps(audience_context, ensure_ascii=False)
-            else:
-                crowd_text = f"reaction={audience_reaction or 'unknown'}"
+            # Format crowd description in a readable way (matching system instructions)
+            crowd_text = self._format_crowd_description(audience_context, audience_reaction)
             user_message = f"crowd, visual and audio description: {crowd_text}."
 
             await self.ws.send(json.dumps({
