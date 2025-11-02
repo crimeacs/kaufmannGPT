@@ -22,6 +22,9 @@ let resampleState = { tail: new Float32Array(0), t: 0 };
 const TARGET_SR = 24000;
 let lastJokeTs = 0;
 let jokeInFlight = false;
+let fallbackJokeTimer = null;
+const JOKE_COOLDOWN_MS = 2000; // faster pacing
+const JOKE_FALLBACK_MS = 3500; // auto-joke if no reaction within this window
 
 // Elements
 const logsContainer = document.getElementById('logs-container');
@@ -202,6 +205,27 @@ async function startSession() {
                 .finally(() => { lastJokeTs = Date.now(); jokeInFlight = false; });
         } catch (_) {}
 
+        // Start fast-paced fallback loop to keep momentum if no reactions arrive
+        try {
+            if (fallbackJokeTimer) clearInterval(fallbackJokeTimer);
+            fallbackJokeTimer = setInterval(() => {
+                const now = Date.now();
+                if (!sessionRunning) return;
+                if (jokeInFlight) return;
+                if (now - lastJokeTs < JOKE_FALLBACK_MS) return;
+                // Fire a synthetic analysis to drive a new joke
+                const synthetic = { verdict: 'uncertain', rationale: 'no reaction yet', ts: new Date().toISOString() };
+                jokeInFlight = true;
+                fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=true`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(synthetic)
+                })
+                    .then(r => r.json())
+                    .then(j => { if (j && j.text) addLog('agent', j.text, 'info'); if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000); })
+                    .catch(() => {})
+                    .finally(() => { lastJokeTs = Date.now(); jokeInFlight = false; });
+            }, 500);
+        } catch (_) {}
+
         sessionRunning = true;
         startBtn && (startBtn.textContent = 'Stop');
         sessionStatus && (sessionStatus.textContent = 'Running');
@@ -219,6 +243,7 @@ async function stopSession() {
     if (!sessionRunning) return;
     try {
         if (analysisTimer) clearInterval(analysisTimer);
+        if (fallbackJokeTimer) { clearInterval(fallbackJokeTimer); fallbackJokeTimer = null; }
         if (wsAnalyze) { try { wsAnalyze.close(); } catch (_) {} wsAnalyze = null; }
         if (processorNode) processorNode.disconnect();
         if (sourceNode) sourceNode.disconnect();
@@ -411,7 +436,7 @@ function verdictToLabel(verdict) {
 
 function maybeTriggerJoke(analysis) {
     const now = Date.now();
-    if (jokeInFlight || (now - lastJokeTs) < 4000) return;
+    if (jokeInFlight || (now - lastJokeTs) < JOKE_COOLDOWN_MS) return;
     jokeInFlight = true;
     const includeAudio = true;
     fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=${includeAudio}`, {
