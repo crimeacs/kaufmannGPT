@@ -633,7 +633,7 @@ function maybeTriggerJoke(analysis) {
         body: JSON.stringify(payload)
     })
         .then(r => r.json())
-        .then(j => {
+        .then(async j => {
             if (j && j.joke_id !== activeJokeId) return;
             if (j && j.text) addLog('agent', j.text, 'info');
             if (j && j.audio_base64) enqueueAgentOutput(null, j.audio_base64, 24000);
@@ -654,7 +654,8 @@ function maybeTriggerJoke(analysis) {
 function scheduleFallback() {
     if (fallbackTimeout) { clearTimeout(fallbackTimeout); fallbackTimeout = null; }
     if (!sessionRunning) return;
-    const delay = Math.max(500, JOKE_FALLBACK_MS - (Date.now() - lastJokeTs));
+    const baseTime = lastJokeEndAt || lastJokeTs;
+    const delay = Math.max(500, JOKE_FALLBACK_MS - (Date.now() - baseTime));
     fallbackTimeout = setTimeout(() => {
         if (!sessionRunning) return;
         if (audioPlaying || speechQueue.length > 0 || jokeInFlight) return scheduleFallback();
@@ -671,7 +672,7 @@ function scheduleFallback() {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
         })
             .then(r => r.json())
-            .then(j => {
+        .then(async j => {
                 if (j && j.joke_id !== activeJokeId) return;
                 if (j && j.text) addLog('agent', j.text, 'info');
                 if (j && j.audio_base64) enqueueAgentOutput(null, j.audio_base64, 24000);
