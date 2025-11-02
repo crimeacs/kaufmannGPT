@@ -184,6 +184,24 @@ async function startSession() {
             connectWSAnalyze();
         }
 
+        // Immediately start with an opening joke (no need to wait for first reaction)
+        try {
+            jokeInFlight = true;
+            const opening = { verdict: 'uncertain', rationale: 'opening turn', ts: new Date().toISOString() };
+            fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=true`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(opening)
+            })
+                .then(r => r.json())
+                .then(j => {
+                    if (j && j.text) addLog('agent', j.text, 'info');
+                    if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
+                })
+                .catch(() => {})
+                .finally(() => { lastJokeTs = Date.now(); jokeInFlight = false; });
+        } catch (_) {}
+
         sessionRunning = true;
         startBtn && (startBtn.textContent = 'Stop');
         sessionStatus && (sessionStatus.textContent = 'Running');
