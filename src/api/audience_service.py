@@ -222,8 +222,8 @@ async def websocket_analyze(websocket: WebSocket):
             await websocket.close()
             return
 
-    # With server-side VAD enabled, we stream audio only; the upstream will
-    # commit and we trigger response.create on VAD events in the analyzer.
+    # Manual 1s chunking: accumulate audio and commit+request after ~1s
+    bytes_since_commit = 0
 
     async def forward_responses():
         try:
@@ -272,8 +272,22 @@ async def websocket_analyze(websocket: WebSocket):
                         pass
 
                     await rt.send_audio_chunk(audio_data)
+                    bytes_since_commit += len(audio_data)
 
-                    # No manual commit/request here; server VAD handles turn commits
+                    # If we have ~1s of audio (16kHz PCM16 ≈ 32,000 bytes), commit and request
+                    if bytes_since_commit >= 32000 and not getattr(rt, 'response_in_progress', False):
+                        try:
+                            # brief delay to ensure upstream processes appends
+                            await asyncio.sleep(0.05)
+                            await rt.commit_audio_buffer()
+                        except Exception:
+                            pass
+                        try:
+                            await rt.request_response()
+                            await log_queue.put({"service": "audience", "message": "Committed ~1s and requested analysis", "level": "info"})
+                        except Exception:
+                            pass
+                        bytes_since_commit = 0
                 else:
                     await websocket.send_json(error_payload("VALIDATION_ERROR", "No audio data provided"))
             except json.JSONDecodeError:

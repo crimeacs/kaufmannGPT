@@ -66,14 +66,8 @@ class RealtimeAudienceAnalyzer:
             "session": {
                 "type": "realtime",
                 "model": self.model,
-                "instructions": None,
                 "audio": {
                     "input": {"format": "pcm16"}
-                },
-                # Enable server-side semantic turn detection (VAD)
-                "turn_detection": {
-                    "type": "server_vad",
-                    "silence_duration_ms": 500
                 }
             }
         }
@@ -142,7 +136,6 @@ class RealtimeAudienceAnalyzer:
         event = {
             "type": "response.create",
             "response": {
-                "modalities": ["text"],  # Only need text response for analysis
                 "instructions": "Analyze the audience reaction and respond with JSON containing: is_laughing (boolean), reaction_type (string), confidence (float 0-1), description (string)"
             }
         }
