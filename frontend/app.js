@@ -144,6 +144,21 @@ function updateMicLevel(level) {
 async function startSession() {
     if (sessionRunning) return;
     try {
+        // Reset context/session state for a fresh run
+        try {
+            jokeSeq = 0;
+            activeJokeId = null;
+            lastJokeText = '';
+            lastJokeAt = 0;
+            lastJokeTs = 0;
+            jokeInFlight = false;
+            audioPlaying = false;
+            timelineEvents = [];
+            if (fallbackTimeout) { clearTimeout(fallbackTimeout); fallbackTimeout = null; }
+            // Reset server-side comedian session
+            fetch(`${JOKE_API_BASE}/reset`, { method: 'POST' }).catch(() => {});
+        } catch (_) {}
+
         statusText && (statusText.textContent = 'Requesting permissions...');
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
