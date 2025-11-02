@@ -219,4 +219,4 @@ async function sendAnalysisToAPI(payload) {
 }
 
 // Initial log
-addLog('system', 'Cringe-based Reinforcement Learning UI initialized', 'success');
+addLog('system', 'Cringe Reinforcement Learning UI initialized', 'success');
