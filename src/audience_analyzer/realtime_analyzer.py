@@ -66,8 +66,15 @@ class RealtimeAudienceAnalyzer:
             "session": {
                 "type": "realtime",
                 "model": self.model,
+                "output_modalities": ["text"],
                 "audio": {
-                    "input": {"format": "pcm16"}
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": 24000},
+                        "turn_detection": {"type": "semantic_vad"}
+                    },
+                    "output": {
+                        "format": {"type": "audio/pcm", "rate": 24000}
+                    }
                 }
             }
         }
@@ -136,6 +143,7 @@ class RealtimeAudienceAnalyzer:
         event = {
             "type": "response.create",
             "response": {
+                "output_modalities": ["text"],
                 "instructions": "Analyze the audience reaction and respond with JSON containing: is_laughing (boolean), reaction_type (string), confidence (float 0-1), description (string)"
             }
         }
@@ -158,13 +166,8 @@ class RealtimeAudienceAnalyzer:
                 self.logger.debug(f"Received event: {event_type}")
 
                 # Handle different event types
-                if event_type in ("input_audio_buffer.speech_stopped", "input_audio_buffer.committed"):
-                    # A turn just ended; request a response if not already in progress
-                    if not self.response_in_progress:
-                        try:
-                            await self.request_response()
-                        except Exception as e:
-                            self.logger.error(f"Failed to request response after commit: {e}")
+                # With semantic VAD enabled, the server will create responses automatically.
+                # We do not manually trigger response.create on speech stop.
 
                 if event_type in ('response.text.delta', 'response.output_text.delta'):
                     # Accumulate text deltas

@@ -19,7 +19,7 @@ let lastAudioRms = 0;
 // WebSocket analysis state
 let wsAnalyze = null;
 let resampleState = { tail: new Float32Array(0), t: 0 };
-const TARGET_SR = 16000;
+const TARGET_SR = 24000;
 
 // Elements
 const logsContainer = document.getElementById('logs-container');
