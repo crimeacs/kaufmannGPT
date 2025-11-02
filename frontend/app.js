@@ -1,6 +1,6 @@
 // Configuration (mocked OpenAI-compatible pipeline by default)
-const USE_MOCK_API = true;
-const OPENAI_COMPAT_API_BASE = 'http://localhost:8000/v1';
+const USE_MOCK_API = false;
+const OPENAI_COMPAT_API_BASE = 'http://localhost:8000';
 
 // State
 let autoScrollEnabled = true;
