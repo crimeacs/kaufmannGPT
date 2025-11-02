@@ -51,6 +51,10 @@ logger = logging.getLogger(__name__)
 reaction_history: deque = deque(maxlen=100)
 latest_reaction: Optional[Dict[str, Any]] = None
 
+# Realtime forwarding task management (ensure only one listener on upstream WS)
+rt_forward_task: Optional[asyncio.Task] = None
+current_ws_client: Optional[WebSocket] = None
+
 # Log streaming
 log_queue: asyncio.Queue = asyncio.Queue()
 
@@ -219,6 +223,8 @@ async def websocket_analyze(websocket: WebSocket):
             return
 
     last_request_ts = 0.0
+    last_commit_ts = 0.0
+    bytes_since_commit = 0  # accumulate audio to ensure >=1s before commit
 
     async def forward_responses():
         try:
@@ -235,7 +241,15 @@ async def websocket_analyze(websocket: WebSocket):
         except Exception as e:
             logger.error(f"Error forwarding realtime responses: {e}")
 
-    forward_task = asyncio.create_task(forward_responses())
+    # Ensure only one upstream listener is active at a time
+    global rt_forward_task, current_ws_client
+    current_ws_client = websocket
+    if rt_forward_task and not rt_forward_task.done():
+        try:
+            rt_forward_task.cancel()
+        except Exception:
+            pass
+    rt_forward_task = asyncio.create_task(forward_responses())
 
     try:
         while True:
@@ -257,19 +271,26 @@ async def websocket_analyze(websocket: WebSocket):
                         pass
 
                     await rt.send_audio_chunk(audio_data)
+                    bytes_since_commit += len(audio_data)
 
                     now = time.time()
-                    if now - last_request_ts > 1.5:
-                        # Commit and request analysis periodically
+                    # Commit only if we have at least 1s of audio (16kHz mono PCM16 ~= 32,000 bytes)
+                    has_min_audio = bytes_since_commit >= 32000
+                    time_ok = (now - last_commit_ts) > 0.9
+                    if has_min_audio and time_ok:
                         try:
                             await rt.commit_audio_buffer()
                         except Exception:
                             pass
-                        await rt.request_response()
-                        dbg = "Committed buffer and requested analysis"
-                        logger.info(dbg)
-                        await log_queue.put({"service": "audience", "message": dbg, "level": "info"})
-                        last_request_ts = now
+                        # Avoid overlapping response requests
+                        if not getattr(rt, 'response_in_progress', False):
+                            await rt.request_response()
+                            dbg = "Committed buffer and requested analysis"
+                            logger.info(dbg)
+                            await log_queue.put({"service": "audience", "message": dbg, "level": "info"})
+                            last_request_ts = now
+                            last_commit_ts = now
+                            bytes_since_commit = 0
                 else:
                     await websocket.send_json(error_payload("VALIDATION_ERROR", "No audio data provided"))
             except json.JSONDecodeError:
@@ -285,9 +306,13 @@ async def websocket_analyze(websocket: WebSocket):
         logger.error(f"WebSocket error: {e}")
     finally:
         try:
-            forward_task.cancel()
+            if rt_forward_task:
+                rt_forward_task.cancel()
         except Exception:
             pass
+        finally:
+            rt_forward_task = None
+            current_ws_client = None
 
 
 @app.get("/latest")

@@ -38,6 +38,7 @@ class RealtimeAudienceAnalyzer:
         self.is_running = False
         self.current_reaction = "neutral"
         self.ws = None
+        self.response_in_progress = False
 
     async def connect(self):
         """Establish WebSocket connection to OpenAI Realtime API"""
@@ -63,10 +64,9 @@ class RealtimeAudienceAnalyzer:
         session_config = {
             "type": "session.update",
             "session": {
-                "modalities": ["text", "audio"],
-                "voice": "alloy",
+                "modalities": ["text"],
                 "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
+                # Force text-only analysis and JSON-only output
                 "turn_detection": None
             }
         }
@@ -83,10 +83,9 @@ class RealtimeAudienceAnalyzer:
         else:
             # Fallback to inline instructions
             session_config["session"]["instructions"] = (
-                "You are an audience reaction analyzer for a comedy show. "
-                "Listen to the audio and determine if the audience is laughing, "
-                "clapping, silent, or showing other reactions. "
-                "Provide structured feedback about the audience's engagement level."
+                "You are an audience reaction analyzer. "
+                "Respond ONLY with a single JSON object and nothing else with fields: "
+                "is_laughing (boolean), reaction_type (string), confidence (float 0-1), description (string)."
             )
 
         await self.ws.send(json.dumps(session_config))
@@ -142,6 +141,7 @@ class RealtimeAudienceAnalyzer:
             }
         }
         await self.ws.send(json.dumps(event))
+        self.response_in_progress = True
         self.logger.debug("Requested analysis response")
 
     async def listen_for_responses(self):
@@ -183,10 +183,13 @@ class RealtimeAudienceAnalyzer:
 
                     except json.JSONDecodeError:
                         self.logger.warning(f"Could not parse response as JSON: {text}")
+                    finally:
+                        self.response_in_progress = False
 
                 elif event_type == 'response.done':
                     # Response completed
                     self.logger.debug("Response completed")
+                    self.response_in_progress = False
 
                 elif event_type == 'error':
                     error_msg = event.get('error', {})
