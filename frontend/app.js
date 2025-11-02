@@ -231,7 +231,7 @@ async function startSession() {
                 .then(j => {
                     if (j && j.joke_id !== activeJokeId) return;
                     if (j && j.text) addLog('agent', j.text, 'info');
-                    if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
+                    if (j && j.audio_base64) enqueueAgentOutput(null, j.audio_base64, 24000);
                     if (j && j.text) {
                         lastJokeText = j.text;
                         lastJokeAt = Date.now();
@@ -530,7 +530,7 @@ function verdictToLabel(verdict) {
 
 function maybeTriggerJoke(analysis) {
     const now = Date.now();
-    if (audioPlaying || jokeInFlight || (now - lastJokeTs) < JOKE_COOLDOWN_MS) return;
+    if (audioPlaying || speechQueue.length > 0 || jokeInFlight || (now - lastJokeTs) < JOKE_COOLDOWN_MS) return;
     jokeInFlight = true;
     lastJokeTs = Date.now();
     const includeAudio = true;
@@ -544,7 +544,7 @@ function maybeTriggerJoke(analysis) {
         .then(j => {
             if (j && j.joke_id !== activeJokeId) return;
             if (j && j.text) addLog('agent', j.text, 'info');
-            if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
+            if (j && j.audio_base64) enqueueAgentOutput(null, j.audio_base64, 24000);
             if (j && j.text) {
                 lastJokeText = j.text;
                 lastJokeAt = Date.now();
@@ -562,7 +562,7 @@ function scheduleFallback() {
     const delay = Math.max(500, JOKE_FALLBACK_MS - (Date.now() - lastJokeTs));
     fallbackTimeout = setTimeout(() => {
         if (!sessionRunning) return;
-        if (audioPlaying || jokeInFlight) return scheduleFallback();
+        if (audioPlaying || speechQueue.length > 0 || jokeInFlight) return scheduleFallback();
         const synthetic = { verdict: 'uncertain', rationale: 'no reaction yet', ts: new Date().toISOString() };
         jokeInFlight = true;
         lastJokeTs = Date.now();
@@ -574,7 +574,7 @@ function scheduleFallback() {
             .then(j => {
                 if (j && j.joke_id !== activeJokeId) return;
                 if (j && j.text) addLog('agent', j.text, 'info');
-                if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
+                if (j && j.audio_base64) enqueueAgentOutput(null, j.audio_base64, 24000);
                 if (j && j.text) {
                     lastJokeText = j.text;
                     lastJokeAt = Date.now();
