@@ -49,6 +49,9 @@ let reactionCanvas = null;
 let reactionCtx = null;
 const REACTION_WINDOW_MS = 30000; // last 30s
 let reactionAnimationHandle = null;
+let jokeMarkers = [];
+let visualFetchInFlight = false;
+const VISUAL_INTERVAL_MS = 1500;
 
 // Elements
 const logsContainer = document.getElementById('logs-container');
@@ -187,7 +190,7 @@ async function startSession() {
 
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         sourceNode = audioCtx.createMediaStreamSource(stream);
-        processorNode = audioCtx.createScriptProcessor(4096, 1, 1);
+        processorNode = audioCtx.createScriptProcessor(2048, 1, 1);
         sourceNode.connect(processorNode);
         processorNode.connect(audioCtx.destination);
         processorNode.onaudioprocess = (e) => {
@@ -248,18 +251,21 @@ async function startSession() {
                         lastJokeAt = Date.now();
                         timelineEvents.push({ type: 'joke', ts: lastJokeAt, text: j.text, joke_id: j.joke_id });
                         if (timelineEvents.length > 500) timelineEvents.shift();
+                        try { pushJokeMarker(lastJokeAt, j && j.joke_id); } catch(_){}
                     }
                 })
                 .catch(() => {})
                 .finally(() => { jokeInFlight = false; scheduleFallback(); });
         } catch (_) {}
 
-        // Start periodic visual analysis (every ~3s)
+        // Start periodic visual analysis (faster)
         try {
             if (visualTimer) clearInterval(visualTimer);
             visualTimer = setInterval(async () => {
                 if (!sessionRunning) return;
                 if (!analysisCanvas || !analysisCtx2d || !cameraPreview || cameraPreview.readyState < 2) return;
+                if (visualFetchInFlight) return;
+                visualFetchInFlight = true;
                 try {
                     analysisCtx2d.drawImage(cameraPreview, 0, 0, analysisCanvas.width, analysisCanvas.height);
                     const dataUrl = analysisCanvas.toDataURL('image/jpeg', 0.7);
@@ -277,7 +283,8 @@ async function startSession() {
                         try { pushReaction('visual', v.visual_verdict, (v.confidence!=null ? v.confidence*100 : null), Date.now()); } catch(_){}
                     }
                 } catch (_) {}
-            }, 3000);
+                finally { visualFetchInFlight = false; }
+            }, VISUAL_INTERVAL_MS);
         } catch (_) {}
 
         sessionRunning = true;
@@ -738,6 +745,28 @@ function renderReactionPlot() {
         }
     }
 
+    // draw joke markers (vertical lines with small top triangles)
+    const markers = jokeMarkers.filter(j => j.ts >= now - windowMs);
+    for (const m of markers) {
+        const x = leftPad + ((m.ts - (now - windowMs)) / windowMs) * (w - leftPad - rightPad);
+        // vertical line
+        reactionCtx.globalAlpha = 1.0;
+        ctx.strokeStyle = '#000000';
+        ctx.beginPath();
+        ctx.moveTo(x + 0.5, 1);
+        ctx.lineTo(x + 0.5, h - 1);
+        ctx.stroke();
+        // top triangle
+        const triH = 8;
+        ctx.fillStyle = '#000080';
+        ctx.beginPath();
+        ctx.moveTo(x, 3);
+        ctx.lineTo(x - 5, 3 + triH);
+        ctx.lineTo(x + 5, 3 + triH);
+        ctx.closePath();
+        ctx.fill();
+    }
+
     // now marker
     ctx.globalAlpha = 1.0;
     ctx.strokeStyle = '#b0b0b0';
@@ -756,6 +785,12 @@ function initReactionPlot() {
     if (reactionAnimationHandle) cancelAnimationFrame(reactionAnimationHandle);
     renderReactionPlot();
     window.addEventListener('resize', () => { if (reactionCanvas) renderReactionPlot(); });
+}
+
+function pushJokeMarker(ts, jokeId) {
+    jokeMarkers.push({ ts, jokeId });
+    const cutoff = Date.now() - REACTION_WINDOW_MS * 2;
+    if (jokeMarkers.length > 500) jokeMarkers = jokeMarkers.filter(j => j.ts >= cutoff);
 }
 
 function summarizeWindow(tsFromMs, tsToMs = Date.now()) {
@@ -869,6 +904,7 @@ function maybeTriggerJoke(analysis) {
                 lastJokeAt = Date.now();
                 timelineEvents.push({ type: 'joke', ts: lastJokeAt, text: j.text, joke_id: j.joke_id });
                 if (timelineEvents.length > 500) timelineEvents.shift();
+                try { pushJokeMarker(lastJokeAt, j && j.joke_id); } catch(_){}
             }
         })
         .catch(() => {})
@@ -908,6 +944,7 @@ function scheduleFallback() {
                     lastJokeAt = Date.now();
                     timelineEvents.push({ type: 'joke', ts: lastJokeAt, text: j.text, joke_id: j.joke_id });
                     if (timelineEvents.length > 500) timelineEvents.shift();
+                    try { pushJokeMarker(lastJokeAt, j && j.joke_id); } catch(_){}
                 }
             })
             .catch(() => {})
