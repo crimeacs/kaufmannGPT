@@ -1,6 +1,8 @@
 // Configuration (mocked OpenAI-compatible pipeline by default)
 const USE_MOCK_API = false;
+const USE_WS_ANALYSIS = true; // Stream mic audio to backend WS
 const OPENAI_COMPAT_API_BASE = 'http://localhost:8000';
+const JOKE_API_BASE = 'http://localhost:8001';
 
 // State
 let autoScrollEnabled = true;
@@ -13,6 +15,11 @@ let analysisTimer = null;
 let analysisCanvas = null;
 let analysisCtx2d = null;
 let lastAudioRms = 0;
+
+// WebSocket analysis state
+let wsAnalyze = null;
+let resampleState = { tail: new Float32Array(0), t: 0 };
+const TARGET_SR = 16000;
 
 // Elements
 const logsContainer = document.getElementById('logs-container');
@@ -51,6 +58,34 @@ if (modalCopy) {
         setTimeout(() => { modalCopy.textContent = 'Copy to Clipboard'; }, 2000);
     };
 }
+
+// Stream backend logs via Server-Sent Events
+function connectServiceLogs(serviceName, url) {
+    try {
+        const es = new EventSource(url);
+        es.onmessage = (evt) => {
+            try {
+                const data = JSON.parse(evt.data);
+                addLog(data.service || serviceName, data.message || '', data.level || 'info');
+            } catch (_) {
+                addLog(serviceName, evt.data, 'info');
+            }
+        };
+        es.onerror = () => {
+            addLog(serviceName, 'Log stream disconnected; retrying...', 'warning');
+            es.close();
+            setTimeout(() => connectServiceLogs(serviceName, url), 3000);
+        };
+        addLog('system', `Connected to ${serviceName} logs`, 'success');
+    } catch (e) {
+        addLog('system', `Failed to connect ${serviceName} logs: ${e.message}`, 'error');
+    }
+}
+
+window.addEventListener('load', () => {
+    connectServiceLogs('audience', `${OPENAI_COMPAT_API_BASE}/stream/logs`);
+    connectServiceLogs('joke', `${JOKE_API_BASE}/stream/logs`);
+});
 
 // Logging
 function addLog(service, message, level = 'info') {
@@ -117,6 +152,19 @@ async function startSession() {
             const rms = Math.sqrt(sum / input.length) || 0;
             lastAudioRms = (lastAudioRms * 0.8) + (rms * 0.2);
             updateMicLevel(lastAudioRms);
+
+            if (USE_WS_ANALYSIS) {
+                try {
+                    const { out, state } = resampleTo16kPCM16(input, audioCtx.sampleRate, resampleState);
+                    resampleState = state;
+                    if (wsAnalyze && wsAnalyze.readyState === WebSocket.OPEN && out.length > 0) {
+                        const b64 = u8ToBase64(new Uint8Array(out.buffer));
+                        wsAnalyze.send(JSON.stringify({ audio: b64 }));
+                    }
+                } catch (e) {
+                    // Swallow to avoid audio glitching; logs will show errors
+                }
+            }
         };
 
         if (!analysisCanvas) {
@@ -126,7 +174,13 @@ async function startSession() {
             analysisCtx2d = analysisCanvas.getContext('2d', { willReadFrequently: true });
         }
 
-        analysisTimer = setInterval(analyzeAndSend, 2000);
+        if (!USE_WS_ANALYSIS) {
+            analysisTimer = setInterval(analyzeAndSend, 2000);
+        }
+
+        if (USE_WS_ANALYSIS) {
+            connectWSAnalyze();
+        }
 
         sessionRunning = true;
         startBtn && (startBtn.textContent = 'Stop');
@@ -145,6 +199,7 @@ async function stopSession() {
     if (!sessionRunning) return;
     try {
         if (analysisTimer) clearInterval(analysisTimer);
+        if (wsAnalyze) { try { wsAnalyze.close(); } catch (_) {} wsAnalyze = null; }
         if (processorNode) processorNode.disconnect();
         if (sourceNode) sourceNode.disconnect();
         if (audioCtx) await audioCtx.close();
@@ -185,6 +240,7 @@ function classifyReaction(rms, brightness) {
 }
 
 async function analyzeAndSend() {
+    if (USE_WS_ANALYSIS) return; // disabled when using WS streaming
     const brightness = getAverageBrightness(cameraPreview);
     const reaction = classifyReaction(lastAudioRms, brightness);
     const payload = {
@@ -216,6 +272,72 @@ async function sendAnalysisToAPI(payload) {
             resolve({ reaction_type: payload.reaction_type, confidence: 0.6 + Math.random() * 0.4 });
         }, 150);
     });
+}
+
+// WebSocket: connect to audience analyzer stream
+function connectWSAnalyze() {
+    const wsUrl = OPENAI_COMPAT_API_BASE.replace(/^http/, 'ws') + '/ws/analyze';
+    try {
+        wsAnalyze = new WebSocket(wsUrl);
+        wsAnalyze.onopen = () => {
+            addLog('analyzer', 'WS connected to /ws/analyze', 'success');
+            statusText && (statusText.textContent = 'Streaming audio to analyzer');
+        };
+        wsAnalyze.onmessage = (evt) => {
+            try {
+                const msg = JSON.parse(evt.data);
+                const reaction = msg.reaction_type || 'unknown';
+                const conf = Math.round((msg.confidence || 0) * 100);
+                micStatus && (micStatus.textContent = `Last: ${reaction} (${conf}%)`);
+                addLog('analyzer', `WS: ${reaction} (conf ${conf}%)`, 'info');
+            } catch (e) {
+                addLog('analyzer', `WS parse: ${e.message}`, 'warning');
+            }
+        };
+        wsAnalyze.onerror = () => {
+            addLog('analyzer', 'WS error', 'error');
+        };
+        wsAnalyze.onclose = () => {
+            addLog('analyzer', 'WS closed', 'warning');
+            if (sessionRunning) setTimeout(connectWSAnalyze, 1500);
+        };
+    } catch (e) {
+        addLog('analyzer', `WS connect failed: ${e.message}`, 'error');
+    }
+}
+
+// Resample float32 to 16k PCM16, maintaining state across calls
+function resampleTo16kPCM16(inputFloat32, inSampleRate, state) {
+    const concatLen = state.tail.length + inputFloat32.length;
+    const samples = new Float32Array(concatLen);
+    samples.set(state.tail, 0);
+    samples.set(inputFloat32, state.tail.length);
+
+    const ratio = inSampleRate / TARGET_SR;
+    const avail = samples.length - state.t; // effective samples from current fractional offset
+    const outLength = Math.max(0, Math.floor(avail / ratio));
+    const out = new Int16Array(outLength);
+    let o = 0;
+    for (let n = 0; n < outLength; n++) {
+        const idx = Math.floor(state.t + n * ratio);
+        const s = samples[idx] || 0;
+        const clamped = Math.max(-1, Math.min(1, s));
+        out[o++] = (clamped * 32767) | 0;
+    }
+    // compute new fractional position and tail
+    const consumed = Math.floor(state.t + outLength * ratio);
+    const newT = (state.t + outLength * ratio) - consumed; // fractional carry
+    const newTail = samples.subarray(consumed);
+    return { out, state: { tail: newTail, t: newT } };
+}
+
+function u8ToBase64(u8) {
+    const CHUNK = 0x8000;
+    let binary = '';
+    for (let i = 0; i < u8.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
+    }
+    return btoa(binary);
 }
 
 // Initial log
