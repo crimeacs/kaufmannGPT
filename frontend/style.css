@@ -282,6 +282,51 @@ button.listening { background-color: var(--warning-color); color: #09131f; }
     margin-top: 0.25rem;
 }
 
+/* Win95-styled reaction badges and meters inside logs */
+.reaction-95 { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; color: #000; }
+.badge-95 {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    background: #c0c0c0;
+    border: 2px solid #c0c0c0;
+    border-top-color: #ffffff;
+    border-left-color: #ffffff;
+    border-right-color: #808080;
+    border-bottom-color: #808080;
+    box-shadow: inset -1px -1px #808080, inset 1px 1px #ffffff;
+    font-weight: 600;
+    min-height: 20px;
+}
+.badge-95-icon { display: inline-block; width: 14px; text-align: center; font-family: 'Pixelify Sans', 'MS Sans Serif Fallback', Arial, sans-serif; }
+.badge-95.is-positive { background: #b6e3b6; }
+.badge-95.is-warm { background: #ffe6b3; }
+.badge-95.is-neutral { background: #e6e6e6; }
+.badge-95.is-negative { background: #f2b3b3; }
+.badge-95.is-unknown { background: #d9d9f3; }
+
+.conf-label { font-size: 12px; color: #000; }
+
+.meter-95 {
+    position: relative;
+    width: 140px;
+    height: 14px;
+    background: #c0c0c0;
+    border: 2px solid #c0c0c0;
+    border-top-color: #ffffff;
+    border-left-color: #ffffff;
+    border-right-color: #808080;
+    border-bottom-color: #808080;
+    box-shadow: inset -1px -1px #808080, inset 1px 1px #ffffff;
+    overflow: hidden;
+}
+.meter-95-bar {
+    height: 100%;
+    background: repeating-linear-gradient(45deg, #008000, #008000 6px, #00a000 6px, #00a000 12px);
+}
+.reaction-src { font-size: 11px; color: #333; opacity: 0.85; }
+
 /* Modal */
 .modal {
     display: none;

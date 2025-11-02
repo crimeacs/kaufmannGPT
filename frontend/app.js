@@ -116,12 +116,14 @@ function addLog(service, message, level = 'info') {
     const entry = document.createElement('div');
     entry.className = `log-entry ${level}`;
     const timestamp = new Date().toLocaleTimeString();
+    const styled = maybeRenderWin95Reaction(service, message);
     entry.innerHTML = `
         <div>
             <span class="timestamp">${timestamp}</span>
             <span class="service">${service}</span>
         </div>
-        <div class="message">${message}</div>
+        <div class="message">${styled}
+        </div>
     `;
     logsContainer.appendChild(entry);
     if (autoScrollEnabled) entry.scrollIntoView({ behavior: 'smooth' });
@@ -547,6 +549,94 @@ function verdictToLabel(verdict) {
     if (verdict === 'miss') return 'silence / groan';
     if (verdict === 'uncertain') return 'confusion';
     return 'neutral';
+}
+
+// Win95-styled rendering for reaction logs
+function maybeRenderWin95Reaction(service, message) {
+    // Keep system boring
+    if (service === 'system') return escapeHtml(message);
+
+    // Only style audience / visual / analyzer
+    const svc = String(service || '').toLowerCase();
+    if (!/(audience|visual|analyzer)/.test(svc)) return escapeHtml(message);
+
+    const parsed = parseReactionMessage(message);
+    if (!parsed) return escapeHtml(message);
+
+    const { source, verdict, confidencePct, raw } = parsed;
+    const v = String((verdict || '').toLowerCase());
+    const cls = verdictClass(v);
+    const icon = verdictIcon(v);
+    const conf = Number.isFinite(confidencePct) ? Math.max(0, Math.min(100, Math.round(confidencePct))) : null;
+
+    const meter = conf == null ? '' : `
+        <div class="meter-95" aria-label="confidence">
+            <div class="meter-95-bar" style="width:${conf}%"></div>
+        </div>`;
+
+    return `
+        <div class="reaction-95">
+            <span class="badge-95 ${cls}"><span class="badge-95-icon">${icon}</span>${escapeHtml(v || source)}</span>
+            ${conf == null ? '' : `<span class="conf-label">${conf}%</span>`}
+            ${meter}
+            <span class="reaction-src">${escapeHtml(source || svc)}</span>
+        </div>
+    `;
+}
+
+function parseReactionMessage(message) {
+    const text = String(message || '');
+    // Patterns we emit in the app:
+    //  - "Verdict: laughing (conf 90%)"
+    //  - "Visual: neutral (conf 0.85)" (fraction)
+    //  - "WS: hit (90%)" or "WS: miss"
+    let m;
+    // Verdict: X (conf 90%)
+    m = text.match(/Verdict:\s*(\w+)\s*\(conf\s*(\d+)%\)/i);
+    if (m) return { source: 'visual', verdict: m[1], confidencePct: Number(m[2]), raw: text };
+
+    // Visual: X (conf 0.85)
+    m = text.match(/Visual:\s*(\w+)\s*\(conf\s*([0-9.]+)\)/i);
+    if (m) {
+        const frac = parseFloat(m[2]);
+        return { source: 'visual', verdict: m[1], confidencePct: Number.isFinite(frac) ? frac * 100 : null, raw: text };
+    }
+
+    // WS: verdict (90%) or WS: verdict
+    m = text.match(/WS:\s*(\w+)(?:\s*\((\d+)%\))?/i);
+    if (m) {
+        const pct = m[2] ? Number(m[2]) : null;
+        return { source: 'audio', verdict: m[1], confidencePct: pct, raw: text };
+    }
+
+    return null;
+}
+
+function verdictClass(v) {
+    if (v === 'laughing' || v === 'hit') return 'is-positive';
+    if (v === 'enjoying' || v === 'mixed') return 'is-warm';
+    if (v === 'neutral') return 'is-neutral';
+    if (v === 'miss' || v === 'silent' || v === 'silence') return 'is-negative';
+    if (v === 'uncertain' || v === 'unknown') return 'is-unknown';
+    return 'is-neutral';
+}
+
+function verdictIcon(v) {
+    if (v === 'laughing' || v === 'hit') return '☺';
+    if (v === 'enjoying' || v === 'mixed') return '♬';
+    if (v === 'neutral') return '◼';
+    if (v === 'miss' || v === 'silent' || v === 'silence') return '✖';
+    if (v === 'uncertain' || v === 'unknown') return '¿';
+    return '◻';
+}
+
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 function summarizeWindow(tsFromMs, tsToMs = Date.now()) {
