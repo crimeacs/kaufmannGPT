@@ -26,6 +26,13 @@ let fallbackJokeTimer = null;
 const JOKE_COOLDOWN_MS = 2000; // faster pacing
 const JOKE_FALLBACK_MS = 3500; // auto-joke if no reaction within this window
 let audioPlaying = false;
+let visualTimer = null;
+let timelineEvents = [];
+let lastJokeText = '';
+let lastJokeAt = 0;
+let jokeSeq = 0;
+let activeJokeId = null;
+let fallbackTimeout = null;
 const POST_TTS_DELAY_MS = 900;
 const MIN_MESSAGE_GAP_MS = 1200;
 let speechQueue = [];
@@ -199,39 +206,26 @@ async function startSession() {
             jokeInFlight = true;
             lastJokeTs = Date.now();
             const opening = { verdict: 'uncertain', rationale: 'opening turn', ts: new Date().toISOString() };
+            const joke_id = ++jokeSeq; activeJokeId = joke_id;
             fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=true`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(opening)
+                body: JSON.stringify({ ...opening, joke_id })
             })
                 .then(r => r.json())
                 .then(j => {
-                    if (j) enqueueAgentOutput(j.text || '', j.audio_base64 || null, 24000);
+                    if (j && j.joke_id !== activeJokeId) return;
+                    if (j && j.text) addLog('agent', j.text, 'info');
+                    if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
+                    if (j && j.text) {
+                        lastJokeText = j.text;
+                        lastJokeAt = Date.now();
+                        timelineEvents.push({ type: 'joke', ts: lastJokeAt, text: j.text, joke_id: j.joke_id });
+                        if (timelineEvents.length > 500) timelineEvents.shift();
+                    }
                 })
                 .catch(() => {})
-                .finally(() => { jokeInFlight = false; });
-        } catch (_) {}
-
-        // Start fast-paced fallback loop to keep momentum if no reactions arrive
-        try {
-            if (fallbackJokeTimer) clearInterval(fallbackJokeTimer);
-            fallbackJokeTimer = setInterval(() => {
-                const now = Date.now();
-                if (!sessionRunning) return;
-                if (audioPlaying || speechQueue.length > 0 || jokeInFlight) return;
-                if (now - lastJokeTs < JOKE_FALLBACK_MS) return;
-                // Fire a synthetic analysis to drive a new joke
-                const synthetic = { verdict: 'uncertain', rationale: 'no reaction yet', ts: new Date().toISOString() };
-                jokeInFlight = true;
-                lastJokeTs = Date.now();
-                fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=true`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(synthetic)
-                })
-                    .then(r => r.json())
-                    .then(j => { if (j) enqueueAgentOutput(j.text || '', j.audio_base64 || null, 24000); })
-                    .catch(() => {})
-                .finally(() => { jokeInFlight = false; });
-            }, 500);
+                .finally(() => { jokeInFlight = false; scheduleFallback(); });
         } catch (_) {}
 
         // Start periodic visual analysis (every ~3s)
@@ -251,6 +245,8 @@ async function startSession() {
                     if (res.ok) {
                         const v = await res.json();
                         addLog('visual', `Verdict: ${v.visual_verdict} (conf ${Math.round(v.confidence*100)}%)`, 'info');
+                        timelineEvents.push({ type: 'visual', ts: Date.now(), payload: v });
+                        if (timelineEvents.length > 500) timelineEvents.shift();
                     }
                 } catch (_) {}
             }, 3000);
@@ -273,7 +269,7 @@ async function stopSession() {
     if (!sessionRunning) return;
     try {
         if (analysisTimer) clearInterval(analysisTimer);
-        if (fallbackJokeTimer) { clearInterval(fallbackJokeTimer); fallbackJokeTimer = null; }
+        if (fallbackTimeout) { clearTimeout(fallbackTimeout); fallbackTimeout = null; }
         if (visualTimer) { clearInterval(visualTimer); visualTimer = null; }
         if (wsAnalyze) { try { wsAnalyze.close(); } catch (_) {} wsAnalyze = null; }
         try { if (currentAudioEl) { currentAudioEl.pause(); } } catch (_) {}
@@ -367,10 +363,12 @@ function connectWSAnalyze() {
         wsAnalyze.onmessage = (evt) => {
             try {
                 const msg = JSON.parse(evt.data);
-                const reaction = msg.reaction_type || 'unknown';
-                const conf = Math.round((msg.confidence || 0) * 100);
-                micStatus && (micStatus.textContent = `Last: ${reaction} (${conf}%)`);
-                addLog('analyzer', `WS: ${reaction} (conf ${conf}%)`, 'info');
+                const verdict = msg.verdict;
+                const reaction = msg.reaction_type || verdict || 'unknown';
+                const hasConf = typeof msg.confidence === 'number';
+                const confPct = hasConf ? ` (${Math.round(msg.confidence * 100)}%)` : '';
+                micStatus && (micStatus.textContent = `Last: ${reaction}${confPct}`);
+                addLog('analyzer', verdict ? `WS: ${verdict}${confPct}` : `WS: ${reaction}${confPct}`, 'info');
                 maybeTriggerJoke(msg);
             } catch (e) {
                 addLog('analyzer', `WS parse: ${e.message}`, 'warning');
@@ -517,21 +515,61 @@ function verdictToLabel(verdict) {
 
 function maybeTriggerJoke(analysis) {
     const now = Date.now();
-    if (audioPlaying || speechQueue.length > 0 || jokeInFlight || (now - lastJokeTs) < JOKE_COOLDOWN_MS) return;
+    if (audioPlaying || jokeInFlight || (now - lastJokeTs) < JOKE_COOLDOWN_MS) return;
     jokeInFlight = true;
     lastJokeTs = Date.now();
     const includeAudio = true;
+    const joke_id = ++jokeSeq; activeJokeId = joke_id;
     fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=${includeAudio}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(analysis)
+        body: JSON.stringify({ ...analysis, joke_id })
     })
         .then(r => r.json())
         .then(j => {
-            if (j) enqueueAgentOutput(j.text || '', j.audio_base64 || null, 24000);
+            if (j && j.joke_id !== activeJokeId) return;
+            if (j && j.text) addLog('agent', j.text, 'info');
+            if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
+            if (j && j.text) {
+                lastJokeText = j.text;
+                lastJokeAt = Date.now();
+                timelineEvents.push({ type: 'joke', ts: lastJokeAt, text: j.text, joke_id: j.joke_id });
+                if (timelineEvents.length > 500) timelineEvents.shift();
+            }
         })
         .catch(() => {})
-        .finally(() => { lastJokeTs = Date.now(); jokeInFlight = false; });
+        .finally(() => { lastJokeTs = Date.now(); jokeInFlight = false; scheduleFallback(); });
+}
+
+function scheduleFallback() {
+    if (fallbackTimeout) { clearTimeout(fallbackTimeout); fallbackTimeout = null; }
+    if (!sessionRunning) return;
+    const delay = Math.max(500, JOKE_FALLBACK_MS - (Date.now() - lastJokeTs));
+    fallbackTimeout = setTimeout(() => {
+        if (!sessionRunning) return;
+        if (audioPlaying || jokeInFlight) return scheduleFallback();
+        const synthetic = { verdict: 'uncertain', rationale: 'no reaction yet', ts: new Date().toISOString() };
+        jokeInFlight = true;
+        lastJokeTs = Date.now();
+        const joke_id = ++jokeSeq; activeJokeId = joke_id;
+        fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=true`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...synthetic, joke_id })
+        })
+            .then(r => r.json())
+            .then(j => {
+                if (j && j.joke_id !== activeJokeId) return;
+                if (j && j.text) addLog('agent', j.text, 'info');
+                if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
+                if (j && j.text) {
+                    lastJokeText = j.text;
+                    lastJokeAt = Date.now();
+                    timelineEvents.push({ type: 'joke', ts: lastJokeAt, text: j.text, joke_id: j.joke_id });
+                    if (timelineEvents.length > 500) timelineEvents.shift();
+                }
+            })
+            .catch(() => {})
+            .finally(() => { jokeInFlight = false; scheduleFallback(); });
+    }, delay);
 }
 
 // Initial log

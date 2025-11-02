@@ -81,6 +81,7 @@ class JokeResponse(BaseModel):
     has_audio: bool
     audio_base64: Optional[str] = None
     timestamp: str
+    joke_id: Optional[int] = None
 
 
 class PerformanceStatsResponse(BaseModel):
@@ -359,7 +360,8 @@ async def generate_joke_from_analysis(analysis: AnalysisPayload, theme: Optional
             theme=joke_data.get('theme', 'general'),
             audience_reaction=audience_reaction,
             has_audio=joke_data['has_audio'],
-            timestamp=joke_data['timestamp']
+            timestamp=joke_data['timestamp'],
+            joke_id=analysis_dict.get('joke_id')
         )
         if include_audio and joke_data['has_audio']:
             audio_base64 = base64.b64encode(joke_data['audio']).decode('utf-8')
