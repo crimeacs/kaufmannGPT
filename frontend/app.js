@@ -625,7 +625,7 @@ function maybeTriggerJoke(analysis) {
     const contextPayload = buildJokeContext(analysis);
     const payload = { joke_id, context: contextPayload };
     if (DEBUG_CONTEXT) {
-        try { addLog('context', `Sending context: ${JSON.stringify(payload)}`, 'info'); } catch (_) {}
+        try { fetch(`${JOKE_API_BASE}/debug/context`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) }).catch(()=>{}); } catch(_){}
     }
     fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=${includeAudio}`, {
         method: 'POST',
@@ -638,7 +638,7 @@ function maybeTriggerJoke(analysis) {
             if (j && j.text) addLog('agent', j.text, 'info');
             if (j && j.audio_base64) enqueueAgentOutput(null, j.audio_base64, 24000);
             if (DEBUG_CONTEXT) {
-                try { addLog('context', `Response joke_id=${j && j.joke_id}`, 'info'); } catch (_) {}
+                try { fetch(`${JOKE_API_BASE}/debug/context`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ response_joke_id: j && j.joke_id }) }).catch(()=>{}); } catch(_){}
             }
             if (j && j.text) {
                 lastJokeText = j.text;
@@ -666,7 +666,7 @@ function scheduleFallback() {
         const contextPayload = buildJokeContext(synthetic);
         const payload = { joke_id, context: contextPayload };
         if (DEBUG_CONTEXT) {
-            try { addLog('context', `Sending context: ${JSON.stringify(payload)}`, 'info'); } catch (_) {}
+            try { fetch(`${JOKE_API_BASE}/debug/context`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) }).catch(()=>{}); } catch(_){}
         }
         fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=true`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
@@ -677,7 +677,7 @@ function scheduleFallback() {
                 if (j && j.text) addLog('agent', j.text, 'info');
                 if (j && j.audio_base64) enqueueAgentOutput(null, j.audio_base64, 24000);
                 if (DEBUG_CONTEXT) {
-                    try { addLog('context', `Response joke_id=${j && j.joke_id}`, 'info'); } catch (_) {}
+                    try { fetch(`${JOKE_API_BASE}/debug/context`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ response_joke_id: j && j.joke_id }) }).catch(()=>{}); } catch(_){}
                 }
                 if (j && j.text) {
                     lastJokeText = j.text;

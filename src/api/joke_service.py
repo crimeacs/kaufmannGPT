@@ -95,6 +95,21 @@ class HealthResponse(BaseModel):
     status: str
     service: str
     version: str
+@app.post("/debug/context")
+async def debug_context(payload: Dict[str, Any]):
+    """Receive client debug context and log to server terminal only."""
+    try:
+        msg = payload
+        # Trim very large blobs for readability
+        txt = json.dumps(msg)
+        if len(txt) > 2000:
+            txt = txt[:2000] + "... (truncated)"
+        logger.info(f"DEBUG CONTEXT: {txt}")
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"Debug context log error: {e}")
+        return {"ok": False}
+
 
 
 class AnalysisPayload(BaseModel):
