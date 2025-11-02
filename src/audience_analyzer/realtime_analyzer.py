@@ -39,12 +39,12 @@ class RealtimeAudienceAnalyzer:
         self.current_reaction = "neutral"
         self.ws = None
         self.response_in_progress = False
+        self._text_buffer = ""
 
     async def connect(self):
         """Establish WebSocket connection to OpenAI Realtime API"""
         headers = {
-            'Authorization': f'Bearer {self.api_key}',
-            'OpenAI-Beta': 'realtime=v1'
+            'Authorization': f'Bearer {self.api_key}'
         }
 
         try:
@@ -64,10 +64,17 @@ class RealtimeAudienceAnalyzer:
         session_config = {
             "type": "session.update",
             "session": {
-                "modalities": ["text"],
-                "input_audio_format": "pcm16",
-                # Force text-only analysis and JSON-only output
-                "turn_detection": None
+                "type": "realtime",
+                "model": self.model,
+                "instructions": None,
+                "audio": {
+                    "input": {"format": "pcm16"}
+                },
+                # Enable server-side semantic turn detection (VAD)
+                "turn_detection": {
+                    "type": "server_vad",
+                    "silence_duration_ms": 500
+                }
             }
         }
 
@@ -83,9 +90,8 @@ class RealtimeAudienceAnalyzer:
         else:
             # Fallback to inline instructions
             session_config["session"]["instructions"] = (
-                "You are an audience reaction analyzer. "
-                "Respond ONLY with a single JSON object and nothing else with fields: "
-                "is_laughing (boolean), reaction_type (string), confidence (float 0-1), description (string)."
+                "You are an audience reaction analyzer. Respond ONLY with a single JSON object and nothing else. "
+                "Fields: is_laughing (boolean), reaction_type (string), confidence (number 0-1), description (string)."
             )
 
         await self.ws.send(json.dumps(session_config))
@@ -107,7 +113,7 @@ class RealtimeAudienceAnalyzer:
 
         # Log basic audio stats
         stats = self._audio_stats(audio_data)
-        self.logger.info(
+        self.logger.debug(
             f"Append audio: bytes={len(audio_data)} samples={int(stats.get('samples',0))} "
             f"rms={stats.get('rms',0):.3f} peak={stats.get('peak',0):.3f}"
         )
@@ -159,14 +165,22 @@ class RealtimeAudienceAnalyzer:
                 self.logger.debug(f"Received event: {event_type}")
 
                 # Handle different event types
-                if event_type == 'response.text.delta':
+                if event_type in ("input_audio_buffer.speech_stopped", "input_audio_buffer.committed"):
+                    # A turn just ended; request a response if not already in progress
+                    if not self.response_in_progress:
+                        try:
+                            await self.request_response()
+                        except Exception as e:
+                            self.logger.error(f"Failed to request response after commit: {e}")
+
+                if event_type in ('response.text.delta', 'response.output_text.delta'):
                     # Accumulate text deltas
                     text_delta = event.get('delta', '')
-                    # Handle streaming text (you may want to accumulate)
+                    self._text_buffer += text_delta
 
-                elif event_type == 'response.text.done':
+                elif event_type in ('response.text.done', 'response.output_text.done'):
                     # Complete text response
-                    text = event.get('text', '')
+                    text = event.get('text', '') or self._text_buffer
                     self.logger.info(f"Realtime text done: {text[:200]}")
                     try:
                         analysis = json.loads(text)
@@ -185,8 +199,9 @@ class RealtimeAudienceAnalyzer:
                         self.logger.warning(f"Could not parse response as JSON: {text}")
                     finally:
                         self.response_in_progress = False
+                        self._text_buffer = ""
 
-                elif event_type == 'response.done':
+                elif event_type in ('response.done', 'response.completed'):
                     # Response completed
                     self.logger.debug("Response completed")
                     self.response_in_progress = False

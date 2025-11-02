@@ -222,9 +222,8 @@ async def websocket_analyze(websocket: WebSocket):
             await websocket.close()
             return
 
-    last_request_ts = 0.0
-    last_commit_ts = 0.0
-    bytes_since_commit = 0  # accumulate audio to ensure >=1s before commit
+    # With server-side VAD enabled, we stream audio only; the upstream will
+    # commit and we trigger response.create on VAD events in the analyzer.
 
     async def forward_responses():
         try:
@@ -261,36 +260,20 @@ async def websocket_analyze(websocket: WebSocket):
 
                 if audio_base64:
                     audio_data = base64.b64decode(audio_base64)
-                    # Debug: log audio stats
+                    # Debug-only stats (no UI spam)
                     try:
                         stats = rt._audio_stats(audio_data)
-                        msg = f"WS recv chunk: bytes={len(audio_data)}, samples={int(stats.get('samples',0))}, rms={stats.get('rms',0):.3f}, peak={stats.get('peak',0):.3f}"
-                        logger.info(msg)
-                        await log_queue.put({"service": "audience", "message": msg, "level": "info"})
+                        dbg = (
+                            f"WS recv chunk: bytes={len(audio_data)}, samples={int(stats.get('samples',0))}, "
+                            f"rms={stats.get('rms',0):.3f}, peak={stats.get('peak',0):.3f}"
+                        )
+                        logger.debug(dbg)
                     except Exception:
                         pass
 
                     await rt.send_audio_chunk(audio_data)
-                    bytes_since_commit += len(audio_data)
 
-                    now = time.time()
-                    # Commit only if we have at least 1s of audio (16kHz mono PCM16 ~= 32,000 bytes)
-                    has_min_audio = bytes_since_commit >= 32000
-                    time_ok = (now - last_commit_ts) > 0.9
-                    if has_min_audio and time_ok:
-                        try:
-                            await rt.commit_audio_buffer()
-                        except Exception:
-                            pass
-                        # Avoid overlapping response requests
-                        if not getattr(rt, 'response_in_progress', False):
-                            await rt.request_response()
-                            dbg = "Committed buffer and requested analysis"
-                            logger.info(dbg)
-                            await log_queue.put({"service": "audience", "message": dbg, "level": "info"})
-                            last_request_ts = now
-                            last_commit_ts = now
-                            bytes_since_commit = 0
+                    # No manual commit/request here; server VAD handles turn commits
                 else:
                     await websocket.send_json(error_payload("VALIDATION_ERROR", "No audio data provided"))
             except json.JSONDecodeError:
