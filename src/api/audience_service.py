@@ -231,7 +231,11 @@ async def websocket_analyze(websocket: WebSocket):
                 reaction_history.append(analysis)
                 global latest_reaction
                 latest_reaction = analysis
-                msg = f"WS analysis: {analysis.get('reaction_type','unknown')} (conf {analysis.get('confidence',0):.2f})"
+                # Prefer new schema if present
+                if 'verdict' in analysis:
+                    msg = f"WS analysis: verdict={analysis.get('verdict')} | {analysis.get('rationale','')}"
+                else:
+                    msg = f"WS analysis: {analysis.get('reaction_type','unknown')} (conf {analysis.get('confidence',0):.2f})"
                 logger.info(msg)
                 await log_queue.put({"service": "audience", "message": msg, "level": "info"})
                 # Forward to client
