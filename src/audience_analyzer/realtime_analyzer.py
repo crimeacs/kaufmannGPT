@@ -79,21 +79,26 @@ class RealtimeAudienceAnalyzer:
             }
         }
 
-        # Add stored prompt if provided
-        if self.prompt_id:
-            session_config["session"]["prompt"] = {
-                "id": self.prompt_id,
-                # Optional: Add variables if needed
-                # "variables": {
-                #     "audience_type": {"type": "input_text", "text": "comedy club"}
-                # }
-            }
-        else:
-            # Fallback to inline instructions
-            session_config["session"]["instructions"] = (
-                "You are an audience reaction analyzer. Respond ONLY with a single JSON object and nothing else. "
-                "Fields: is_laughing (boolean), reaction_type (string), confidence (number 0-1), description (string)."
-            )
+        # Always use inline system prompt instructions (ignore stored prompt IDs)
+        session_config["session"]["instructions"] = (
+            "SYSTEM: JSON-Only Audience Reaction Rater (Audio Only)\n\n"
+            "YOU MUST OUTPUT EXACTLY ONE VALID JSON OBJECT PER MESSAGE.\n"
+            "No prose. No code fences. No prefixes/suffixes. No extra tokens. English keys/values only.\n\n"
+            "## Task\n\n"
+            "From a single room mic (no transcript), evaluate crowd reaction to jokes.\n\n"
+            "Part B: In-Performance Assessment (Active Listening)\n\n"
+            "Read Non-Verbal Cues: Are they leaning in (engaged) or chatting to each other? This is dynamic communication.\n"
+            "Listen to the Quality of the Laugh: Differentiate polite chuckle vs gut laugh.\n\n"
+            "## Output schema (fixed keys & order)\n"
+            "{\n    \"verdict\": \"hit|mixed|miss|uncertain\",\n    \"rationale\": \"concise neutral sentence describing reaction\"\n}\n\n"
+            "## Suppression\n"
+            "Never output text outside the JSON object.\n\n"
+            "## Self-check (MANDATORY)\n"
+            "1) Single JSON object. 2) JSON.parse succeeds. 3) Keys exist, order matches, formats correct.\n\n"
+            "## Recovery (single allowed fallback)\n"
+            "If previous message was invalid JSON, next message must be:\n"
+            "{ \"repair\": true, \"reason\": \"invalid_json_previous_message\", \"last_complete_t_event\": null }\n"
+        )
 
         await self.ws.send(json.dumps(session_config))
         self.logger.info("Session configured")
@@ -144,7 +149,9 @@ class RealtimeAudienceAnalyzer:
             "type": "response.create",
             "response": {
                 "output_modalities": ["text"],
-                "instructions": "Analyze the audience reaction and respond with JSON containing: is_laughing (boolean), reaction_type (string), confidence (float 0-1), description (string)"
+                "instructions": (
+                    "Use the session instructions strictly. Output exactly one JSON object with keys verdict and rationale."
+                )
             }
         }
         await self.ws.send(json.dumps(event))
