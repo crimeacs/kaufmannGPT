@@ -234,6 +234,28 @@ async function startSession() {
             }, 500);
         } catch (_) {}
 
+        // Start periodic visual analysis (every ~3s)
+        try {
+            if (visualTimer) clearInterval(visualTimer);
+            visualTimer = setInterval(async () => {
+                if (!sessionRunning) return;
+                if (!analysisCanvas || !analysisCtx2d || !cameraPreview || cameraPreview.readyState < 2) return;
+                try {
+                    analysisCtx2d.drawImage(cameraPreview, 0, 0, analysisCanvas.width, analysisCanvas.height);
+                    const dataUrl = analysisCanvas.toDataURL('image/jpeg', 0.7);
+                    const imageBase64 = dataUrl.split(',')[1];
+                    const res = await fetch(`${OPENAI_COMPAT_API_BASE}/analyze-image`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ image_base64: imageBase64 })
+                    });
+                    if (res.ok) {
+                        const v = await res.json();
+                        addLog('visual', `Verdict: ${v.visual_verdict} (conf ${Math.round(v.confidence*100)}%)`, 'info');
+                    }
+                } catch (_) {}
+            }, 3000);
+        } catch (_) {}
+
         sessionRunning = true;
         startBtn && (startBtn.textContent = 'Stop');
         sessionStatus && (sessionStatus.textContent = 'Running');
@@ -252,6 +274,7 @@ async function stopSession() {
     try {
         if (analysisTimer) clearInterval(analysisTimer);
         if (fallbackJokeTimer) { clearInterval(fallbackJokeTimer); fallbackJokeTimer = null; }
+        if (visualTimer) { clearInterval(visualTimer); visualTimer = null; }
         if (wsAnalyze) { try { wsAnalyze.close(); } catch (_) {} wsAnalyze = null; }
         try { if (currentAudioEl) { currentAudioEl.pause(); } } catch (_) {}
         currentAudioEl = null;

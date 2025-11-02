@@ -20,6 +20,7 @@ from datetime import datetime
 import time
 import yaml
 import os
+import aiohttp
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -91,6 +92,16 @@ class HealthResponse(BaseModel):
     status: str
     service: str
     version: str
+# Visual analysis request/response models
+class ImageAnalysisRequest(BaseModel):
+    image_base64: str
+
+class ImageAnalysisResponse(BaseModel):
+    visual_verdict: str
+    confidence: float
+    notes: str
+    timestamp: str
+
 
 
 # Initialize analyzers (singletons)
@@ -172,6 +183,78 @@ async def analyze_audio(request: AudioAnalysisRequest):
         error_msg = f"Error analyzing audio: {e}"
         logger.error(error_msg)
         await log_queue.put({"service": "audience", "message": error_msg, "level": "error"})
+        status, payload = map_exception(e)
+        return JSONResponse(status_code=status, content=payload)
+
+
+@app.post("/analyze-image", response_model=ImageAnalysisResponse)
+async def analyze_image_endpoint(req: ImageAnalysisRequest):
+    """
+    Analyze a single webcam frame (base64 JPEG) using OpenAI vision and return structured JSON.
+    """
+    openai_key = config.get('openai_api_key')
+    if not openai_key:
+        return JSONResponse(status_code=500, content=error_payload("UPSTREAM_AUTH", "Missing OPENAI_API_KEY"))
+
+    headers = {
+        'Authorization': f'Bearer {openai_key}',
+        'Content-Type': 'application/json'
+    }
+
+    # Prompt and schema tuned for quick crowd vibe classification
+    json_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "visual_verdict": {"type": "string", "enum": ["laughing", "enjoying", "scattered", "neutral", "uncertain"]},
+            "confidence": {"type": "number"},
+            "notes": {"type": "string"}
+        },
+        "required": ["visual_verdict", "confidence", "notes"]
+    }
+
+    payload = {
+        "model": config.get('visual_model', 'gpt-4o'),
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": (
+                        "You are a live audience visual analyzer. Output JSON only.\n"
+                        "Classify the crowd vibe from this single frame as one of: laughing, enjoying, scattered, neutral, uncertain.\n"
+                        "Use plain English in notes; no identities." )},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{req.image_base64}"}}
+                ]
+            }
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "visual_audience_vibe", "strict": True, "schema": json_schema}
+        },
+        "max_tokens": 150
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    return JSONResponse(status_code=502, content=error_payload("UPSTREAM_ERROR", f"Vision API {resp.status}: {text}"))
+                data = await resp.json()
+                content = data['choices'][0]['message']['content']
+                result = json.loads(content)
+                ts = datetime.now().isoformat()
+                # Log and stream
+                msg = f"Visual: {result.get('visual_verdict','unknown')} (conf {result.get('confidence',0):.2f})"
+                logger.info(msg)
+                await log_queue.put({"service": "audience", "message": msg, "level": "info"})
+                return ImageAnalysisResponse(
+                    visual_verdict=result.get('visual_verdict', 'uncertain'),
+                    confidence=float(result.get('confidence', 0)),
+                    notes=result.get('notes', ''),
+                    timestamp=ts
+                )
+    except Exception as e:
         status, payload = map_exception(e)
         return JSONResponse(status_code=status, content=payload)
 
