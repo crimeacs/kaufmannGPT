@@ -69,7 +69,7 @@ class RealtimeJokeGenerator:
             "session": {
                 "type": "realtime",
                 "model": self.model,
-                "output_modalities": ["audio", "text"],
+                "output_modalities": ["audio"],
                 "audio": {
                     "output": {
                         "format": {"type": "audio/pcm", "rate": 24000},
@@ -212,7 +212,7 @@ OPERATIONAL REMINDERS
         await self.ws.send(json.dumps({
             "type": "response.create",
             "response": {
-                "output_modalities": ["audio", "text"],
+                "output_modalities": ["audio"],
                 "audio": {"output": {"format": {"type": "audio/pcm", "rate": 24000}, "voice": self.voice}}
             }
         }))

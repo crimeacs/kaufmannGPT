@@ -20,6 +20,8 @@ let lastAudioRms = 0;
 let wsAnalyze = null;
 let resampleState = { tail: new Float32Array(0), t: 0 };
 const TARGET_SR = 24000;
+let lastJokeTs = 0;
+let jokeInFlight = false;
 
 // Elements
 const logsContainer = document.getElementById('logs-container');
@@ -182,22 +184,6 @@ async function startSession() {
             connectWSAnalyze();
         }
 
-        // Fire opener from joke generator (text only)
-        try {
-            fetch(`${JOKE_API_BASE}/generate/auto?include_audio=true`, { method: 'POST' })
-                .then(r => r.json())
-                .then(j => {
-                    if (j && j.text) {
-                        addLog('agent', j.text, 'info');
-                        showModal && showModal('Agent Opener', j.text);
-                    }
-                    if (j && j.audio_base64) {
-                        playPcm16Base64(j.audio_base64, 24000);
-                    }
-                })
-                .catch(() => {});
-        } catch (_) {}
-
         sessionRunning = true;
         startBtn && (startBtn.textContent = 'Stop');
         sessionStatus && (sessionStatus.textContent = 'Running');
@@ -306,6 +292,7 @@ function connectWSAnalyze() {
                 const conf = Math.round((msg.confidence || 0) * 100);
                 micStatus && (micStatus.textContent = `Last: ${reaction} (${conf}%)`);
                 addLog('analyzer', `WS: ${reaction} (conf ${conf}%)`, 'info');
+                maybeTriggerJoke(msg);
             } catch (e) {
                 addLog('analyzer', `WS parse: ${e.message}`, 'warning');
             }
@@ -394,6 +381,33 @@ async function playPcm16Base64(b64, sampleRate = 24000) {
         audio.play().catch(() => {});
         setTimeout(() => URL.revokeObjectURL(url), 30000);
     } catch (_) {}
+}
+
+function verdictToLabel(verdict) {
+    if (verdict === 'hit') return 'big laugh / applause';
+    if (verdict === 'mixed') return 'small laugh / chatter';
+    if (verdict === 'miss') return 'silence / groan';
+    if (verdict === 'uncertain') return 'confusion';
+    return 'neutral';
+}
+
+function maybeTriggerJoke(analysis) {
+    const now = Date.now();
+    if (jokeInFlight || (now - lastJokeTs) < 4000) return;
+    jokeInFlight = true;
+    const includeAudio = true;
+    fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=${includeAudio}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(analysis)
+    })
+        .then(r => r.json())
+        .then(j => {
+            if (j && j.text) addLog('agent', j.text, 'info');
+            if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
+        })
+        .catch(() => {})
+        .finally(() => { lastJokeTs = Date.now(); jokeInFlight = false; });
 }
 
 // Initial log

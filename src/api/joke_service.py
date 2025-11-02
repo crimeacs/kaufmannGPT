@@ -96,6 +96,16 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class AnalysisPayload(BaseModel):
+    verdict: Optional[str] = None
+    rationale: Optional[str] = None
+    reaction_type: Optional[str] = None
+    confidence: Optional[float] = None
+    timestamp: Optional[str] = None
+    class Config:
+        extra = 'allow'
+
+
 # Initialize generator (singleton)
 generator = None
 
@@ -315,6 +325,49 @@ async def generate_joke_auto(theme: Optional[str] = None, include_audio: bool = 
 
     except Exception as e:
         error_msg = f"Error in auto-generate: {e}"
+        logger.error(error_msg)
+        await log_queue.put({"service": "joke", "message": error_msg, "level": "error"})
+        status, payload = map_exception(e)
+        return JSONResponse(status_code=status, content=payload)
+
+
+@app.post("/generate/from_analysis", response_model=JokeResponse)
+async def generate_joke_from_analysis(analysis: AnalysisPayload, theme: Optional[str] = None, include_audio: bool = True):
+    try:
+        analysis_dict = analysis.dict()
+        verdict = analysis_dict.get('verdict')
+        if verdict == 'hit':
+            audience_reaction = 'big laugh / applause'
+        elif verdict == 'mixed':
+            audience_reaction = 'small laugh / chatter'
+        elif verdict == 'miss':
+            audience_reaction = 'silence / groan'
+        elif verdict == 'uncertain':
+            audience_reaction = 'confusion'
+        else:
+            audience_reaction = analysis_dict.get('reaction_type', 'neutral')
+
+        generator_instance = get_generator()
+        joke_data = await generator_instance.generate_and_deliver_joke(
+            audience_reaction=audience_reaction,
+            context=theme,
+            audience_context=analysis_dict
+        )
+
+        response = JokeResponse(
+            text=joke_data['text'],
+            theme=joke_data.get('theme', 'general'),
+            audience_reaction=audience_reaction,
+            has_audio=joke_data['has_audio'],
+            timestamp=joke_data['timestamp']
+        )
+        if include_audio and joke_data['has_audio']:
+            audio_base64 = base64.b64encode(joke_data['audio']).decode('utf-8')
+            response.audio_base64 = audio_base64
+        return response
+
+    except Exception as e:
+        error_msg = f"Error in generate-from-analysis: {e}"
         logger.error(error_msg)
         await log_queue.put({"service": "joke", "message": error_msg, "level": "error"})
         status, payload = map_exception(e)
