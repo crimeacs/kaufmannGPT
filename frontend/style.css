@@ -363,6 +363,7 @@ button.listening { background-color: var(--warning-color); color: #09131f; }
     justify-content: center;
     height: 100vh;
     padding: 16px;
+    position: relative;
 }
 
 .window {
@@ -382,6 +383,8 @@ button.listening { background-color: var(--warning-color); color: #09131f; }
         inset -2px -2px #000000,
         inset 2px 2px #dfdfdf,
         4px 4px 0 rgba(0,0,0,0.25);
+    position: relative;
+    z-index: 2;
 }
 
 .title-bar {
@@ -572,3 +575,25 @@ button.listening { background-color: var(--warning-color); color: #09131f; }
 /* Mic widget tweaks inside Win95 window */
 #main-window .mic-indicator { background: #ffffff; border: 1px solid #808080; }
 #main-window .mic-status { color: #000; }
+
+/* DVD-style screensaver layer (under windows, above solid background) */
+.dvd-layer {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.dvd-logo {
+    position: absolute;
+    font-size: 36px;
+    font-weight: 400;
+    font-family: 'Pixelify Sans', 'Coral Pixels', 'MS Sans Serif Fallback', Arial, sans-serif;
+    color: #ffffff;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+    user-select: none;
+    will-change: transform;
+}
