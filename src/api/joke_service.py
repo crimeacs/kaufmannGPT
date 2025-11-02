@@ -336,8 +336,18 @@ async def generate_joke_auto(theme: Optional[str] = None, include_audio: bool = 
 async def generate_joke_from_analysis(analysis: AnalysisPayload, theme: Optional[str] = None, include_audio: bool = True):
     try:
         analysis_dict = analysis.dict()
-        verdict = analysis_dict.get('verdict')
-        if verdict == 'hit':
+        # Robust reaction mapping (supports nested context payloads)
+        ctx = analysis_dict.get('context') or {}
+        base_analysis = ctx.get('analysis') or {}
+        audio_latest = ctx.get('audio_latest') or {}
+        fused = ctx.get('fused_reaction')
+        # Prefer explicit verdicts, then reaction_type
+        verdict = analysis_dict.get('verdict') or base_analysis.get('verdict') or audio_latest.get('verdict')
+        reaction_type = analysis_dict.get('reaction_type') or base_analysis.get('reaction_type')
+
+        if isinstance(fused, str) and fused:
+            audience_reaction = fused
+        elif verdict == 'hit':
             audience_reaction = 'big laugh / applause'
         elif verdict == 'mixed':
             audience_reaction = 'small laugh / chatter'
@@ -345,8 +355,10 @@ async def generate_joke_from_analysis(analysis: AnalysisPayload, theme: Optional
             audience_reaction = 'silence / groan'
         elif verdict == 'uncertain':
             audience_reaction = 'confusion'
+        elif isinstance(reaction_type, str) and reaction_type:
+            audience_reaction = reaction_type
         else:
-            audience_reaction = analysis_dict.get('reaction_type', 'neutral')
+            audience_reaction = 'neutral'
 
         generator_instance = get_generator()
         joke_data = await generator_instance.generate_and_deliver_joke(
