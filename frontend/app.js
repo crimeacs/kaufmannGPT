@@ -25,6 +25,7 @@ let jokeInFlight = false;
 let fallbackJokeTimer = null;
 const JOKE_COOLDOWN_MS = 2000; // faster pacing
 const JOKE_FALLBACK_MS = 3500; // auto-joke if no reaction within this window
+let audioPlaying = false;
 
 // Elements
 const logsContainer = document.getElementById('logs-container');
@@ -212,7 +213,7 @@ async function startSession() {
             fallbackJokeTimer = setInterval(() => {
                 const now = Date.now();
                 if (!sessionRunning) return;
-                if (jokeInFlight) return;
+                if (audioPlaying || jokeInFlight) return;
                 if (now - lastJokeTs < JOKE_FALLBACK_MS) return;
                 // Fire a synthetic analysis to drive a new joke
                 const synthetic = { verdict: 'uncertain', rationale: 'no reaction yet', ts: new Date().toISOString() };
@@ -423,7 +424,10 @@ async function playPcm16Base64(b64, sampleRate = 24000) {
         const blob = new Blob([wavBytes], { type: 'audio/wav' });
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
-        audio.play().catch(() => {});
+        audioPlaying = true;
+        audio.onended = () => { audioPlaying = false; URL.revokeObjectURL(url); };
+        setTimeout(() => { audioPlaying = false; URL.revokeObjectURL(url); }, 15000);
+        audio.play().catch(() => { audioPlaying = false; URL.revokeObjectURL(url); });
         setTimeout(() => URL.revokeObjectURL(url), 30000);
     } catch (_) {}
 }
@@ -438,7 +442,7 @@ function verdictToLabel(verdict) {
 
 function maybeTriggerJoke(analysis) {
     const now = Date.now();
-    if (jokeInFlight || (now - lastJokeTs) < JOKE_COOLDOWN_MS) return;
+    if (audioPlaying || jokeInFlight || (now - lastJokeTs) < JOKE_COOLDOWN_MS) return;
     jokeInFlight = true;
     lastJokeTs = Date.now();
     const includeAudio = true;
