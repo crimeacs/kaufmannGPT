@@ -23,8 +23,8 @@ const TARGET_SR = 24000;
 let lastJokeTs = 0;
 let jokeInFlight = false;
 let fallbackJokeTimer = null;
-const JOKE_COOLDOWN_MS = 2000; // faster pacing
-const JOKE_FALLBACK_MS = 3500; // auto-joke if no reaction within this window
+const JOKE_COOLDOWN_MS = 1200; // minimum gap between generations
+const JOKE_FALLBACK_MS = 3000; // auto-joke if no reaction within this window
 let audioPlaying = false;
 let visualTimer = null;
 let timelineEvents = [];
@@ -37,8 +37,8 @@ let fallbackTimeout = null;
 let latestAudioAnalysis = null;
 let latestVisualAnalysis = null;
 const DEBUG_CONTEXT = true;
-const POST_TTS_DELAY_MS = 900;
-const MIN_MESSAGE_GAP_MS = 1200;
+const POST_TTS_DELAY_MS = 450;
+const MIN_MESSAGE_GAP_MS = 900;
 let speechQueue = [];
 let drainingSpeechQueue = false;
 let lastSpokenAt = 0;
@@ -389,8 +389,9 @@ function connectWSAnalyze() {
                 const confPct = hasConf ? ` (${Math.round(msg.confidence * 100)}%)` : '';
                 micStatus && (micStatus.textContent = `Last: ${reaction}${confPct}`);
                 addLog('analyzer', verdict ? `WS: ${verdict}${confPct}` : `WS: ${reaction}${confPct}`, 'info');
-                // cache latest analysis; next joke is triggered on audio end or fallback
+                // cache latest analysis and attempt immediate trigger if we're ready
                 latestAudioAnalysis = msg;
+                try { triggerIfReady(msg); } catch (_) {}
             } catch (e) {
                 addLog('analyzer', `WS parse: ${e.message}`, 'warning');
             }
@@ -445,6 +446,20 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function triggerIfReady(analysis = null) {
+    if (!sessionRunning) return false;
+    const now = Date.now();
+    if (audioPlaying || speechQueue.length > 0 || jokeInFlight) return false;
+    // Ensure there's a beat after the last speaking turn
+    const sinceEnd = now - (lastJokeEndAt || lastJokeTs || 0);
+    if (sinceEnd < MIN_MESSAGE_GAP_MS) return false;
+    // Respect minimal cooldown between generations
+    if ((now - lastJokeTs) < JOKE_COOLDOWN_MS) return false;
+    const chosen = analysis || latestAudioAnalysis || { verdict: 'uncertain', rationale: 'no recent analysis' };
+    maybeTriggerJoke(chosen);
+    return true;
+}
+
 // Audio helpers: wrap PCM16 24k mono into WAV for playback
 function pcm16ToWavBytes(pcmBytes, sampleRate = 24000, numChannels = 1) {
     const blockAlign = numChannels * 2;
@@ -490,10 +505,10 @@ async function playPcm16Base64(b64, sampleRate = 24000) {
                 audioPlaying = false;
                 try { URL.revokeObjectURL(url); } catch (_) {}
             };
-            audio.onended = () => { lastJokeEndAt = Date.now(); cleanup(); resolve(); };
+            audio.onended = () => { lastJokeEndAt = Date.now(); cleanup(); resolve(); try { triggerIfReady(); } catch (_) {} };
             audio.onerror = () => { cleanup(); resolve(); };
             audio.play().catch(() => { cleanup(); resolve(); });
-            setTimeout(() => { lastJokeEndAt = Date.now(); cleanup(); resolve(); }, 15000);
+            setTimeout(() => { lastJokeEndAt = Date.now(); cleanup(); resolve(); try { triggerIfReady(); } catch (_) {} }, 15000);
         } catch (_) { resolve(); }
     });
 }
