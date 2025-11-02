@@ -26,6 +26,12 @@ let fallbackJokeTimer = null;
 const JOKE_COOLDOWN_MS = 2000; // faster pacing
 const JOKE_FALLBACK_MS = 3500; // auto-joke if no reaction within this window
 let audioPlaying = false;
+const POST_TTS_DELAY_MS = 900;
+const MIN_MESSAGE_GAP_MS = 1200;
+let speechQueue = [];
+let drainingSpeechQueue = false;
+let lastSpokenAt = 0;
+let currentAudioEl = null;
 
 // Elements
 const logsContainer = document.getElementById('logs-container');
@@ -200,8 +206,7 @@ async function startSession() {
             })
                 .then(r => r.json())
                 .then(j => {
-                    if (j && j.text) addLog('agent', j.text, 'info');
-                    if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
+                    if (j) enqueueAgentOutput(j.text || '', j.audio_base64 || null, 24000);
                 })
                 .catch(() => {})
                 .finally(() => { jokeInFlight = false; });
@@ -213,7 +218,7 @@ async function startSession() {
             fallbackJokeTimer = setInterval(() => {
                 const now = Date.now();
                 if (!sessionRunning) return;
-                if (audioPlaying || jokeInFlight) return;
+                if (audioPlaying || speechQueue.length > 0 || jokeInFlight) return;
                 if (now - lastJokeTs < JOKE_FALLBACK_MS) return;
                 // Fire a synthetic analysis to drive a new joke
                 const synthetic = { verdict: 'uncertain', rationale: 'no reaction yet', ts: new Date().toISOString() };
@@ -223,7 +228,7 @@ async function startSession() {
                     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(synthetic)
                 })
                     .then(r => r.json())
-                    .then(j => { if (j && j.text) addLog('agent', j.text, 'info'); if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000); })
+                    .then(j => { if (j) enqueueAgentOutput(j.text || '', j.audio_base64 || null, 24000); })
                     .catch(() => {})
                 .finally(() => { jokeInFlight = false; });
             }, 500);
@@ -248,6 +253,11 @@ async function stopSession() {
         if (analysisTimer) clearInterval(analysisTimer);
         if (fallbackJokeTimer) { clearInterval(fallbackJokeTimer); fallbackJokeTimer = null; }
         if (wsAnalyze) { try { wsAnalyze.close(); } catch (_) {} wsAnalyze = null; }
+        try { if (currentAudioEl) { currentAudioEl.pause(); } } catch (_) {}
+        currentAudioEl = null;
+        audioPlaying = false;
+        speechQueue = [];
+        drainingSpeechQueue = false;
         if (processorNode) processorNode.disconnect();
         if (sourceNode) sourceNode.disconnect();
         if (audioCtx) await audioCtx.close();
@@ -389,6 +399,10 @@ function u8ToBase64(u8) {
     return btoa(binary);
 }
 
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // Audio helpers: wrap PCM16 24k mono into WAV for playback
 function pcm16ToWavBytes(pcmBytes, sampleRate = 24000, numChannels = 1) {
     const blockAlign = numChannels * 2;
@@ -418,18 +432,56 @@ function pcm16ToWavBytes(pcmBytes, sampleRate = 24000, numChannels = 1) {
 }
 
 async function playPcm16Base64(b64, sampleRate = 24000) {
+    return await new Promise((resolve) => {
+        try {
+            const pcmBytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+            const wavBytes = pcm16ToWavBytes(pcmBytes, sampleRate, 1);
+            const blob = new Blob([wavBytes], { type: 'audio/wav' });
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            currentAudioEl = audio;
+            audioPlaying = true;
+            const cleanup = () => {
+                audio.onended = null;
+                audio.onerror = null;
+                if (currentAudioEl === audio) currentAudioEl = null;
+                audioPlaying = false;
+                try { URL.revokeObjectURL(url); } catch (_) {}
+            };
+            audio.onended = () => { cleanup(); resolve(); };
+            audio.onerror = () => { cleanup(); resolve(); };
+            audio.play().catch(() => { cleanup(); resolve(); });
+            setTimeout(() => { cleanup(); resolve(); }, 15000);
+        } catch (_) { resolve(); }
+    });
+}
+
+function enqueueAgentOutput(text, audioBase64, sampleRate = 24000) {
+    speechQueue.push({ text, audioBase64, sampleRate });
+    if (!drainingSpeechQueue) drainSpeechQueue();
+}
+
+async function drainSpeechQueue() {
+    if (drainingSpeechQueue) return;
+    drainingSpeechQueue = true;
     try {
-        const pcmBytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-        const wavBytes = pcm16ToWavBytes(pcmBytes, sampleRate, 1);
-        const blob = new Blob([wavBytes], { type: 'audio/wav' });
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audioPlaying = true;
-        audio.onended = () => { audioPlaying = false; URL.revokeObjectURL(url); };
-        setTimeout(() => { audioPlaying = false; URL.revokeObjectURL(url); }, 15000);
-        audio.play().catch(() => { audioPlaying = false; URL.revokeObjectURL(url); });
-        setTimeout(() => URL.revokeObjectURL(url), 30000);
-    } catch (_) {}
+        while (speechQueue.length && sessionRunning) {
+            const { text, audioBase64, sampleRate } = speechQueue.shift();
+            const now = Date.now();
+            const gap = now - lastSpokenAt;
+            if (gap < MIN_MESSAGE_GAP_MS) await sleep(MIN_MESSAGE_GAP_MS - gap);
+            if (text) addLog('agent', text, 'info');
+            if (audioBase64) {
+                await playPcm16Base64(audioBase64, sampleRate);
+                await sleep(POST_TTS_DELAY_MS);
+            } else {
+                await sleep(Math.max(MIN_MESSAGE_GAP_MS, POST_TTS_DELAY_MS));
+            }
+            lastSpokenAt = Date.now();
+        }
+    } finally {
+        drainingSpeechQueue = false;
+    }
 }
 
 function verdictToLabel(verdict) {
@@ -442,7 +494,7 @@ function verdictToLabel(verdict) {
 
 function maybeTriggerJoke(analysis) {
     const now = Date.now();
-    if (audioPlaying || jokeInFlight || (now - lastJokeTs) < JOKE_COOLDOWN_MS) return;
+    if (audioPlaying || speechQueue.length > 0 || jokeInFlight || (now - lastJokeTs) < JOKE_COOLDOWN_MS) return;
     jokeInFlight = true;
     lastJokeTs = Date.now();
     const includeAudio = true;
@@ -453,8 +505,7 @@ function maybeTriggerJoke(analysis) {
     })
         .then(r => r.json())
         .then(j => {
-            if (j && j.text) addLog('agent', j.text, 'info');
-            if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
+            if (j) enqueueAgentOutput(j.text || '', j.audio_base64 || null, 24000);
         })
         .catch(() => {})
         .finally(() => { lastJokeTs = Date.now(); jokeInFlight = false; });
