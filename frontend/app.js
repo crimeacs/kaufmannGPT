@@ -30,6 +30,7 @@ let visualTimer = null;
 let timelineEvents = [];
 let lastJokeText = '';
 let lastJokeAt = 0;
+let lastJokeEndAt = 0;
 let jokeSeq = 0;
 let activeJokeId = null;
 let fallbackTimeout = null;
@@ -489,10 +490,10 @@ async function playPcm16Base64(b64, sampleRate = 24000) {
                 audioPlaying = false;
                 try { URL.revokeObjectURL(url); } catch (_) {}
             };
-            audio.onended = () => { cleanup(); resolve(); };
+            audio.onended = () => { lastJokeEndAt = Date.now(); cleanup(); resolve(); };
             audio.onerror = () => { cleanup(); resolve(); };
             audio.play().catch(() => { cleanup(); resolve(); });
-            setTimeout(() => { cleanup(); resolve(); }, 15000);
+            setTimeout(() => { lastJokeEndAt = Date.now(); cleanup(); resolve(); }, 15000);
         } catch (_) { resolve(); }
     });
 }
@@ -534,7 +535,9 @@ function verdictToLabel(verdict) {
 }
 
 function summarizeWindow(tsFromMs, tsToMs = Date.now()) {
-    const win = timelineEvents.filter(e => e.ts >= tsFromMs && e.ts <= tsToMs);
+    const win = timelineEvents
+        .filter(e => e.ts >= tsFromMs && e.ts <= tsToMs)
+        .sort((a,b)=>a.ts-b.ts);
     const audioCounts = {};
     const visualCounts = {};
     for (const e of win) {
@@ -549,16 +552,36 @@ function summarizeWindow(tsFromMs, tsToMs = Date.now()) {
     return { audio_counts: audioCounts, visual_counts: visualCounts, window_ms: tsToMs - tsFromMs };
 }
 
+function fuseReactions(audio_latest, visual_latest) {
+    const aVerdict = audio_latest && (audio_latest.verdict || audio_latest.reaction_type);
+    const vVerdict = visual_latest && visual_latest.visual_verdict;
+    if (vVerdict === 'laughing') return 'big laugh / applause';
+    if (aVerdict === 'hit') return 'big laugh / applause';
+    if (vVerdict === 'enjoying') return 'small laugh / chatter';
+    if (aVerdict === 'mixed') return 'small laugh / chatter';
+    if (aVerdict === 'miss') return 'silence / groan';
+    if (aVerdict === 'uncertain' || vVerdict === 'uncertain') return 'confusion';
+    return 'neutral';
+}
+
 function buildJokeContext(baseAnalysis) {
-    const tail = timelineEvents.slice(-20);
-    const prev = lastJokeAt ? summarizeWindow(lastJokeAt) : null;
+    const tail = timelineEvents.slice(-20).sort((a,b)=>a.ts-b.ts);
     const audio_latest = latestAudioAnalysis || null;
     const visual_latest = latestVisualAnalysis || null;
+    const fused_reaction = fuseReactions(audio_latest, visual_latest);
+    // Window summaries around the last joke
+    const pre_window = lastJokeAt ? summarizeWindow(Math.max(0, lastJokeAt - 3000), lastJokeAt) : null;
+    const during_window = (lastJokeAt && lastJokeEndAt && lastJokeEndAt > lastJokeAt)
+        ? summarizeWindow(lastJokeAt, lastJokeEndAt) : null;
+    const post_window = (lastJokeEndAt && lastJokeEndAt <= Date.now())
+        ? summarizeWindow(lastJokeEndAt, Date.now()) : null;
+
     return {
-        prev_joke: lastJokeText ? { text: lastJokeText, ts: lastJokeAt } : null,
+        prev_joke: lastJokeText ? { text: lastJokeText, ts_start: lastJokeAt, ts_end: lastJokeEndAt || null } : null,
+        fused_reaction,
         audio_latest,
         visual_latest,
-        post_reactions: prev,
+        windows: { pre_window, during_window, post_window },
         timeline_tail: tail,
         analysis: baseAnalysis || null
     };
