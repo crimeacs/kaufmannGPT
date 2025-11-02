@@ -574,3 +574,72 @@ function scheduleFallback() {
 
 // Initial log
 addLog('system', 'Cringe Reinforcement Learning UI initialized', 'success');
+
+// DVD-style bouncing "CringeGPT" screensaver (under main window)
+(function initDvdScreensaver() {
+    const layer = document.getElementById('dvd-layer');
+    const logo = document.getElementById('dvd-logo');
+    if (!layer || !logo) return;
+
+    let bounds = layer.getBoundingClientRect();
+    let logoWidth = 0;
+    let logoHeight = 0;
+    let x = Math.random() * Math.max(1, bounds.width - 120);
+    let y = Math.random() * Math.max(1, bounds.height - 60);
+    let vx = 180; // px/s
+    let vy = 150; // px/s
+    let lastTs = null;
+
+    function setRandomColor() {
+        const hue = Math.floor(Math.random() * 360);
+        const sat = 85;
+        const light = 60;
+        logo.style.color = `hsl(${hue} ${sat}% ${light}%)`;
+    }
+
+    function measure() {
+        // Force measurement by temporarily showing transform
+        logo.style.transform = `translate3d(-9999px, -9999px, 0)`;
+        logoWidth = logo.offsetWidth;
+        logoHeight = logo.offsetHeight;
+    }
+
+    function clamp(val, min, max) { return Math.max(min, Math.min(max, val)); }
+
+    function step(ts) {
+        if (lastTs == null) lastTs = ts;
+        const dt = Math.min(0.050, (ts - lastTs) / 1000); // cap delta to avoid jumps
+        lastTs = ts;
+
+        const maxX = Math.max(0, bounds.width - logoWidth);
+        const maxY = Math.max(0, bounds.height - logoHeight);
+
+        x += vx * dt;
+        y += vy * dt;
+
+        let bounced = false;
+        if (x <= 0) { x = 0; vx = Math.abs(vx); bounced = true; }
+        else if (x >= maxX) { x = maxX; vx = -Math.abs(vx); bounced = true; }
+
+        if (y <= 0) { y = 0; vy = Math.abs(vy); bounced = true; }
+        else if (y >= maxY) { y = maxY; vy = -Math.abs(vy); bounced = true; }
+
+        if (bounced) setRandomColor();
+        logo.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+        requestAnimationFrame(step);
+    }
+
+    function handleResize() {
+        bounds = layer.getBoundingClientRect();
+        measure();
+        x = clamp(x, 0, Math.max(0, bounds.width - logoWidth));
+        y = clamp(y, 0, Math.max(0, bounds.height - logoHeight));
+    }
+
+    // Initialize
+    measure();
+    setRandomColor();
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    requestAnimationFrame(step);
+})();
