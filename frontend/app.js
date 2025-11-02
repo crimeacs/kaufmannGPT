@@ -565,10 +565,38 @@ function fuseReactions(audio_latest, visual_latest) {
 }
 
 function buildJokeContext(baseAnalysis) {
-    const tail = timelineEvents.slice(-20).sort((a,b)=>a.ts-b.ts);
+    // Build a compact, non-duplicative tail, ordered by timestamp
+    const tailRaw = timelineEvents.slice(-50).sort((a,b)=>a.ts-b.ts);
     const audio_latest = latestAudioAnalysis || null;
     const visual_latest = latestVisualAnalysis || null;
     const fused_reaction = fuseReactions(audio_latest, visual_latest);
+    const latestAudioTs = audio_latest && audio_latest.timestamp ? Date.parse(audio_latest.timestamp) : null;
+    const latestVisualTs = visual_latest && visual_latest.timestamp ? Date.parse(visual_latest.timestamp) : null;
+
+    const tail = tailRaw
+        .filter(e => {
+            // Drop current prev_joke duplicate in tail
+            if (e.type === 'joke' && e.ts === lastJokeAt) return false;
+            // Avoid duplicating latest audio/visual already broken out
+            if (e.type === 'audio' && latestAudioTs && Math.abs(e.ts - latestAudioTs) < 5) return false;
+            if (e.type === 'visual' && latestVisualTs && Math.abs(e.ts - latestVisualTs) < 5) return false;
+            return true;
+        })
+        .map(e => {
+            if (e.type === 'visual') {
+                const v = e.payload || {};
+                return { type: 'visual', ts: e.ts, visual_verdict: v.visual_verdict, confidence: v.confidence };
+            }
+            if (e.type === 'audio') {
+                const v = e.payload || {};
+                return { type: 'audio', ts: e.ts, verdict: v.verdict || v.reaction_type };
+            }
+            if (e.type === 'joke') {
+                return { type: 'joke', ts: e.ts, joke_id: e.joke_id };
+            }
+            return e;
+        })
+        .slice(-12);
     // Window summaries around the last joke
     const pre_window = lastJokeAt ? summarizeWindow(Math.max(0, lastJokeAt - 3000), lastJokeAt) : null;
     const during_window = (lastJokeAt && lastJokeEndAt && lastJokeEndAt > lastJokeAt)
