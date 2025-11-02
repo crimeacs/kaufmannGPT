@@ -42,6 +42,8 @@ class RealtimeJokeGenerator:
 
         self.ws = None
         self.current_audio_buffer = bytearray()
+        self.session_configured = False
+        self._lock = asyncio.Lock()
 
     async def connect(self):
         """Establish WebSocket connection to OpenAI Realtime API"""
@@ -50,8 +52,10 @@ class RealtimeJokeGenerator:
         }
 
         try:
-            self.ws = await websockets.connect(self.ws_url, extra_headers=headers)
-            self.logger.info("Connected to OpenAI Realtime API for joke generation")
+            if self.ws is None:
+                self.ws = await websockets.connect(self.ws_url, extra_headers=headers)
+                self.logger.info("Connected to OpenAI Realtime API for joke generation")
+                self.session_configured = False
             return True
         except Exception as e:
             self.logger.error(f"Failed to connect to Realtime API: {e}")
@@ -84,7 +88,8 @@ class RealtimeJokeGenerator:
         session_config["session"]["instructions"] = instructions
 
         await self.ws.send(json.dumps(session_config))
-        self.logger.info(f"Session configured for {audience_reaction} audience")
+        self.session_configured = True
+        self.logger.info(f"Session configured for {audience_reaction or 'default'} audience")
 
     def _build_instructions(self, audience_context: Optional[Dict[str, Any]], audience_reaction: Optional[str]) -> str:
         """Build persona/rules system instructions for joke generation."""
@@ -178,13 +183,15 @@ OPERATIONAL REMINDERS
         if context:
             self.current_theme = context
 
-        # Connect if not already connected
-        if not self.ws:
-            if not await self.connect():
-                raise RuntimeError("Failed to connect to OpenAI Realtime API")
+        async with self._lock:
+            # Connect if not already connected
+            if not self.ws:
+                if not await self.connect():
+                    raise RuntimeError("Failed to connect to OpenAI Realtime API")
 
-        # Configure session
-        await self.configure_session(audience_context=audience_context, audience_reaction=audience_reaction)
+            # Configure session once per process (or if not yet configured)
+            if not self.session_configured:
+                await self.configure_session(audience_context=audience_context, audience_reaction=audience_reaction)
 
         # Create conversation item with text prompt
         # Build the turn input using the latest crowd description

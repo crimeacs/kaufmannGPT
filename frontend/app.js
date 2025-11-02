@@ -190,6 +190,7 @@ async function startSession() {
         // Immediately start with an opening joke (no need to wait for first reaction)
         try {
             jokeInFlight = true;
+            lastJokeTs = Date.now();
             const opening = { verdict: 'uncertain', rationale: 'opening turn', ts: new Date().toISOString() };
             fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=true`, {
                 method: 'POST',
@@ -202,7 +203,7 @@ async function startSession() {
                     if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000);
                 })
                 .catch(() => {})
-                .finally(() => { lastJokeTs = Date.now(); jokeInFlight = false; });
+                .finally(() => { jokeInFlight = false; });
         } catch (_) {}
 
         // Start fast-paced fallback loop to keep momentum if no reactions arrive
@@ -216,13 +217,14 @@ async function startSession() {
                 // Fire a synthetic analysis to drive a new joke
                 const synthetic = { verdict: 'uncertain', rationale: 'no reaction yet', ts: new Date().toISOString() };
                 jokeInFlight = true;
+                lastJokeTs = Date.now();
                 fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=true`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(synthetic)
                 })
                     .then(r => r.json())
                     .then(j => { if (j && j.text) addLog('agent', j.text, 'info'); if (j && j.audio_base64) playPcm16Base64(j.audio_base64, 24000); })
                     .catch(() => {})
-                    .finally(() => { lastJokeTs = Date.now(); jokeInFlight = false; });
+                .finally(() => { jokeInFlight = false; });
             }, 500);
         } catch (_) {}
 
@@ -438,6 +440,7 @@ function maybeTriggerJoke(analysis) {
     const now = Date.now();
     if (jokeInFlight || (now - lastJokeTs) < JOKE_COOLDOWN_MS) return;
     jokeInFlight = true;
+    lastJokeTs = Date.now();
     const includeAudio = true;
     fetch(`${JOKE_API_BASE}/generate/from_analysis?include_audio=${includeAudio}`, {
         method: 'POST',
