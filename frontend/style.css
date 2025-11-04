@@ -629,6 +629,39 @@ button.listening { background-color: var(--warning-color); color: #09131f; }
 
 #reaction-canvas { width: 100%; height: 100%; display: block; }
 
+/* Win95 Big Joke Counter */
+.joke-counter-95 {
+    margin-top: 8px;
+    background: #c0c0c0;
+    border: 2px solid #c0c0c0;
+    border-top-color: #ffffff;
+    border-left-color: #ffffff;
+    border-right-color: #808080;
+    border-bottom-color: #808080;
+    box-shadow: inset -1px -1px #808080, inset 1px 1px #ffffff;
+    padding: 6px 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.joke-counter-label { font-size: 12px; color: #000; }
+.joke-counter-display {
+    background: #ffffff;
+    color: #000;
+    border: 2px solid #c0c0c0;
+    border-top-color: #ffffff;
+    border-left-color: #ffffff;
+    border-right-color: #808080;
+    border-bottom-color: #808080;
+    box-shadow: inset -1px -1px #808080, inset 1px 1px #ffffff;
+    min-width: 80px;
+    text-align: right;
+    padding: 6px 10px;
+    font-family: 'Pixelify Sans', 'MS Sans Serif Fallback', Arial, sans-serif;
+    font-size: 28px;
+    line-height: 1;
+}
+
 /* Mic widget tweaks inside Win95 window */
 #main-window .mic-indicator { background: #ffffff; border: 1px solid #808080; }
 #main-window .mic-status { color: #000; }

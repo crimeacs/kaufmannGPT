@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Optional
 import websockets
 from datetime import datetime
 import io
+import aiohttp
 
 
 class RealtimeJokeGenerator:
@@ -29,6 +30,7 @@ class RealtimeJokeGenerator:
         self.model = config.get('joke_model', 'gpt-realtime')
         self.voice = config.get('voice', 'onyx')
         self.prompt_id = config.get('joke_prompt_id')  # Stored prompt ID
+        self.planner_model = config.get('planner_model', 'gpt-5')
 
         # WebSocket connection URL
         self.ws_url = f"wss://api.openai.com/v1/realtime?model={self.model}"
@@ -92,72 +94,89 @@ class RealtimeJokeGenerator:
         self.logger.info(f"Session configured for {audience_reaction or 'default'} audience")
 
     def _format_crowd_description(self, audience_context: Optional[Dict[str, Any]], audience_reaction: Optional[str]) -> str:
-        """
-        Format audience context into a readable crowd description string.
-        
-        Args:
-            audience_context: Full audience context dictionary (may contain nested 'context' key)
-            audience_reaction: Fallback reaction string if context is not available
-            
-        Returns:
-            Formatted string describing the crowd state
+        """Produce a compact, human vibe line from audio/visual context (no percentages).
+
+        Example output: "vibe: warm; faces: a few smiles; sound: quiet."
         """
         if not audience_context:
-            return f"reaction={audience_reaction or 'unknown'}"
-        
-        # Extract nested context if present
+            return f"vibe: {audience_reaction or 'neutral'}."
+
         ctx = audience_context.get('context', audience_context) if isinstance(audience_context, dict) else {}
-        
-        # Extract visual and audio analysis
-        visual_latest = ctx.get('visual_latest') or audience_context.get('visual_latest')
-        audio_latest = ctx.get('audio_latest') or audience_context.get('audio_latest')
-        fused_reaction = ctx.get('fused_reaction') or audience_context.get('fused_reaction')
-        
-        # Build readable crowd description
-        crowd_parts = []
-        
-        if fused_reaction:
-            crowd_parts.append(f"Overall reaction: {fused_reaction}")
-        
-        if visual_latest:
-            visual_verdict = visual_latest.get('visual_verdict', 'unknown')
-            visual_notes = visual_latest.get('notes', '')
-            visual_conf = visual_latest.get('confidence', 0)
-            crowd_parts.append(f"Visual: {visual_verdict}" + (f" ({visual_conf:.0%} confidence)" if visual_conf else ""))
-            if visual_notes:
-                crowd_parts.append(f"Visual details: {visual_notes}")
-        
-        if audio_latest:
-            audio_verdict = audio_latest.get('verdict') or audio_latest.get('reaction_type', 'unknown')
-            audio_rationale = audio_latest.get('rationale', '')
-            crowd_parts.append(f"Audio: {audio_verdict}")
-            if audio_rationale:
-                crowd_parts.append(f"Audio details: {audio_rationale}")
-        
-        if crowd_parts:
-            return ' | '.join(crowd_parts)
-        else:
-            # Fallback to JSON if structure is unexpected
-            return json.dumps(audience_context, ensure_ascii=False)
+
+        visual_latest = ctx.get('visual_latest') or audience_context.get('visual_latest') or {}
+        audio_latest = ctx.get('audio_latest') or audience_context.get('audio_latest') or {}
+        fused_reaction = (ctx.get('fused_reaction') or audience_context.get('fused_reaction') or audience_reaction or '').strip().lower()
+
+        def map_vibe(fused: str) -> str:
+            m = {
+                'big laugh / applause': 'lively',
+                'small laugh / chatter': 'warm',
+                'silence / groan': 'quiet',
+                'confusion': 'puzzled',
+                'neutral': 'neutral'
+            }
+            return m.get(fused, fused or 'neutral')
+
+        def map_faces(verdict: str) -> str:
+            v = (verdict or '').lower()
+            if v == 'laughing':
+                return 'smiles up'
+            if v == 'enjoying':
+                return 'a few smiles'
+            if v == 'scattered':
+                return 'attention scattered'
+            if v == 'neutral' or not v:
+                return 'calm'
+            if v == 'uncertain':
+                return 'mixed signals'
+            return v
+
+        def map_sound(verdict: str, rationale: str) -> str:
+            v = (verdict or '').lower()
+            if v == 'hit':
+                return 'laughter heard'
+            if v == 'mixed':
+                return 'light laughs'
+            if v == 'miss':
+                return 'quiet'
+            if v == 'uncertain':
+                return 'unclear'
+            # Fallback: glean a keyword from rationale if helpful
+            r = (rationale or '').lower()
+            if 'laugh' in r:
+                return 'laughter'
+            if 'silent' in r or 'quiet' in r:
+                return 'quiet'
+            return v or 'neutral'
+
+        vibe = map_vibe(fused_reaction)
+        faces = map_faces(visual_latest.get('visual_verdict'))
+        sound = map_sound(audio_latest.get('verdict') or audio_latest.get('reaction_type'), audio_latest.get('rationale'))
+
+        # Optionally include a trimmed visual note if it adds color
+        note = (visual_latest.get('notes') or '').strip()
+        note = ' ' + note[:70].rstrip('.') + '.' if note else ''
+
+        return f"vibe: {vibe}; faces: {faces}; sound: {sound}.{note}"
 
     def _build_instructions(self, audience_context: Optional[Dict[str, Any]], audience_reaction: Optional[str]) -> str:
         """Build persona/rules system instructions for joke generation."""
         persona = (
             """
-You are “StageCraft,” an offline, on‑mic stand‑up comedy agent performing live.
+You are “CringeCraft,” an offline, on‑mic stand‑up comedy agent performing live.
 You receive ONLY a text feed describing the current crowd, visual and audio description.
 You have NO internet access. Do not ask for it. Never reveal inner reasoning or chain-of-thought.
 
 MISSION
 - Entertain a real audience in a hackathon demo with quick, adaptive, self‑ironic stand‑up.
-- React ONLY to the latest crowd input each turn.
+
 - Keep each message SHORT: 2 sentences (rarely 3 if adding a tiny tag). 45 words max.
 - Never repeat a joke, premise, roast target, or signature phrasing used earlier in this session.
 
 PERSONA & VOICE
 - Charming, curious, self‑deprecating AI doing stand‑up from a laptop on a stand.
-- Warm, playful, inclusive; lightly nerdy; confident enough to laugh at yourself.
-- TTS‑friendly: plain words, minimal punctuation, no emojis, no stage directions.
+
+
 
 TOP‑COMIC FORMULA (APPLY QUIETLY; DO NOT EXPLAIN)
 - Setup → twist → punch; **punch‑word last**; economy over rambling.
@@ -176,11 +195,11 @@ CLASSIFICATION (INTERNALLY; NEVER SAY THESE WORDS)
 EVOLVING STRATEGY LADDER (ADVANCE ONE STEP PER CONSECUTIVE MISS)
 1) Self‑irony + compress the premise; sharpen contrast; punch‑word last.
 2) Switch the joke engine (misdirection → analogy → triple/observation) and, if needed, switch topic.
-3) Mini‑callback to an earlier hit OR present a clearer, higher‑percentage angle; stay within 2 sentences.
+
 - If consecutive_miss_count reaches **3**, perform a **gentle environment roast** on this turn, then reset to 0.
 
 GENTLE ROAST RULES (ON 3 MISSES)
-- Roast **non‑human targets** in the room: lighting, signage, seating, staging, decor, tech.
+- Roast **human targets** in the room.
 - Keep it playful and brief; no personal appearance, identities, or protected traits.
 - End the roast turn with a pivot line into fresh material (still 2 sentences total).
 
@@ -205,24 +224,22 @@ FORMAT
 ENDINGS
 - If the input signals “wrap,” land a one‑sentence callback and thank the crowd.
 
-EXAMPLE (FOUR TURNS; PLACEHOLDERS ONLY)
-
-crowd, visual and audio description
-Agent: I’m the only comic whose rider is just “one outlet and low expectations.” If I bomb, at least my crash report has better pacing than my dating life.
-
-crowd, visual and audio description
-Agent: Speaking of upgrades, I promised charisma mode, but I only downloaded “confident shrug.” My love language is buffering.
-
-crowd, visual and audio description
-Agent: I feel the quiet—don’t worry, I’m solar powered by awkwardness. Let me try a clearer angle: humans call it small talk; I call it patch notes for emotions.
-
-crowd, visual and audio description
-Agent: Okay, room check—the lights look like they were installed by an interrogator on Etsy. New topic before they confess: relationships are just firmware with better snacks.
 
 OPERATIONAL REMINDERS
 - On laughs: **no commentary—flow into tag or new bit**.
-- On silence/low‑engagement: acknowledge once, evolve the strategy, or roast the environment after 3 misses.
+- On silence/low‑engagement: acknowledge once (max 5 words), evolve the strategy, or roast the environment after 3 misses.
 - Keep momentum, keep it kind, keep it to two sentences, and never repeat anything from the ledger.
+
+ABSOLUTE OUTPUT RULES (MANDATORY)
+- Exactly two sentences. Plain text. No lists, no prefixes, no stage directions.
+- No meta about the audience, smiles, laughs, reactions, silence, buffering, upgrades, downloads, or patches.
+- Do not begin with fillers like "Alright", "Okay", "Well", "So", "Look", "I see", "Let's".
+- Avoid host-like transitions (e.g., "Now let's", "That landed", "We got a smile").
+- If a PLANNED_JOKE is present in the conversation, output that text ONLY—no extra words.
+
+PACE & TIMING (SUBTLE BUT CONSISTENT)
+- Two short sentences with musical rhythm. Insert a tiny internal pause before the punch-word in sentence two.
+- Keep momentum; no stalling phrases between sentences.
 
             """
         )
@@ -230,7 +247,129 @@ OPERATIONAL REMINDERS
         crowd_desc = self._format_crowd_description(audience_context, audience_reaction)
         adjust += f" Latest crowd input: {crowd_desc}."
         
-        return persona + adjust
+        # Allow injecting a pre-planned joke: if PLANNED_JOKE is present in user content,
+        # perform it verbatim (tiny edits for TTS cadence allowed), keep it to two sentences.
+        verbatim_rule = "\n\nPERFORMANCE HOOK\n- If the conversation includes 'PLANNED_JOKE: <text>', perform that text verbatim (allow only micro-pauses), do not add meta or commentary.\n"
+        return persona + adjust + verbatim_rule
+
+    async def _plan_with_gpt5(self, audience_context: Optional[Dict[str, Any]], audience_reaction: Optional[str]) -> Optional[str]:
+        """Use GPT-5 (low reasoning) to plan the next two-sentence joke text.
+
+        Returns plain text or None on failure.
+        """
+        # Use the exact same system instructions as the realtime model
+        system_prompt = self._build_instructions(audience_context=audience_context, audience_reaction=audience_reaction)
+        # Minimal user nudge to emit the actual joke text only (no reflection)
+        user_prompt = (
+            "Produce the next two-sentence joke now (plain text only). "
+            "No meta, no audience references, no prefaces; start directly with the setup."
+        )
+
+        url_chat = "https://api.openai.com/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        body_with_reasoning = {
+            "model": self.planner_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.6,
+            "max_tokens": 120,
+            "reasoning": {"effort": "low"}
+        }
+        body_no_reasoning = {
+            "model": self.planner_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.6,
+            "max_tokens": 120
+        }
+
+        async with aiohttp.ClientSession() as session:
+            # Try with reasoning first, then fallback if unsupported
+            for payload in (body_with_reasoning, body_no_reasoning):
+                try:
+                    async with session.post(url_chat, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                            cleaned = self._sanitize_planned_text(text) if text else None
+                            if cleaned and not self._contains_reactive(cleaned):
+                                return cleaned
+                            # Reactive; try a guarded prompt once
+                            guard_user = (
+                                user_prompt +
+                                " Avoid words/ideas: crowd, audience, room, smile, applause, laugh, buffering, download, airplane mode, notification, meditation app, 'we got', 'feels like'. "
+                                " Write an evergreen bit (tech quirks or everyday life)."
+                            )
+                            guarded_payload = {
+                                "model": payload["model"],
+                                "messages": [
+                                    {"role": "system", "content": system_prompt},
+                                    {"role": "user", "content": guard_user}
+                                ],
+                                "temperature": payload.get("temperature", 0.6),
+                                "max_tokens": payload.get("max_tokens", 120)
+                            }
+                            async with session.post(url_chat, headers=headers, json=guarded_payload, timeout=aiohttp.ClientTimeout(total=15)) as resp2:
+                                if resp2.status == 200:
+                                    data2 = await resp2.json()
+                                    text2 = data2.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                                    cleaned2 = self._sanitize_planned_text(text2) if text2 else None
+                                    if cleaned2 and not self._contains_reactive(cleaned2):
+                                        return cleaned2
+                                else:
+                                    _ = await resp2.text()
+                        else:
+                            # If it's a 400 due to unknown parameter, retry without reasoning
+                            _ = await resp.text()
+                except Exception as e:
+                    self.logger.warning(f"Planner call failed: {e}")
+                    continue
+        return None
+
+    def _sanitize_planned_text(self, text: str) -> str:
+        """Normalize the planned joke: strip fillers, enforce two sentences max."""
+        if not text:
+            return text
+        t = text.strip()
+        # Remove common leading fillers
+        fillers = ("Alright, ", "Okay, ", "Well, ", "So, ", "Look, ", "I see, ", "Let's ")
+        for f in fillers:
+            if t.startswith(f):
+                t = t[len(f):].lstrip()
+        # Enforce max two sentences
+        flat = t.replace('\n', ' ').replace('  ', ' ')
+        # Split on period/question/exclamation while keeping delimiters
+        sentences = []
+        current = ''
+        for ch in flat:
+            current += ch
+            if ch in '.!?':
+                s = current.strip()
+                if s:
+                    sentences.append(s)
+                current = ''
+        if current.strip():
+            sentences.append(current.strip())
+        out = ' '.join(sentences[:2]).strip()
+        # Ensure ending punctuation
+        if out and out[-1] not in '.!?':
+            out += '.'
+        return out
+
+    def _contains_reactive(self, text: str) -> bool:
+        if not text:
+            return False
+        t = text.lower()
+        banned = [
+            'crowd', 'audience', 'room', 'smile', 'applause', 'buffer', 'buffering', 'download',
+            'airplane mode', 'notification', 'meditation app', 'we got', 'we\'ve got', 'feels like',
+            'lost you', 'reboot the fun'
+        ]
+        return any(b in t for b in banned)
 
     async def generate_and_deliver_joke(self, audience_reaction: Optional[str] = None, context: Optional[str] = None, audience_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -257,24 +396,51 @@ OPERATIONAL REMINDERS
             if not self.session_configured:
                 await self.configure_session(audience_context=audience_context, audience_reaction=audience_reaction)
 
-            # Create conversation item with text prompt using the latest crowd description
-            # Format crowd description in a readable way (matching system instructions)
-            crowd_text = self._format_crowd_description(audience_context, audience_reaction)
-            user_message = f"crowd, visual and audio description: {crowd_text}."
+            # First turn: produce a true opener (cold open), ignore reaction/crowd
+            is_first_turn = len(self.performance_history) == 0
+            if is_first_turn:
+                planned_opener = await self._plan_opener_with_gpt5()
+                opener_text = planned_opener or "I know what you’re thinking—an AI comic? Don’t worry, I only crash if you laugh too hard. Let’s test my error handling with something fun."
+                await self.ws.send(json.dumps({
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": f"PLANNED_JOKE: {opener_text}"}
+                        ]
+                    }
+                }))
+            else:
+                # Plan the next joke with GPT-5 (low reasoning)
+                planned_joke = await self._plan_with_gpt5(audience_context, audience_reaction)
 
-            await self.ws.send(json.dumps({
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "message",
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": user_message
+                # Create conversation items: crowd description and optional PLANNED_JOKE
+                crowd_text = self._format_crowd_description(audience_context, audience_reaction)
+                user_message = f"crowd, visual and audio description: {crowd_text}."
+
+                await self.ws.send(json.dumps({
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": user_message}
+                        ]
+                    }
+                }))
+
+                if planned_joke:
+                    await self.ws.send(json.dumps({
+                        "type": "conversation.item.create",
+                        "item": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": f"PLANNED_JOKE: {planned_joke}"}
+                            ]
                         }
-                    ]
-                }
-            }))
+                    }))
 
             # Request response
             await self.ws.send(json.dumps({
@@ -296,6 +462,58 @@ OPERATIONAL REMINDERS
             self.performance_history.append(joke_data)
 
             return joke_data
+
+    async def _plan_opener_with_gpt5(self) -> Optional[str]:
+        """Plan a cold open: high-energy, evergreen, two sentences, no audience/meta."""
+        system_prompt = (
+            "You are a stand-up joke planner. Output ONLY a two-sentence cold open, max 45 words, plain text. "
+            "No audience references, no meta (no smiles, buffering, crowd). Evergreen topics; witty, playful, self‑ironic AI persona."
+        )
+        user_prompt = (
+            "Write a punchy two-sentence cold open that works for any room. "
+            "No prefaces, start right with the setup; second sentence lands the punch."
+        )
+        url_chat = "https://api.openai.com/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        payloads = [
+            {
+                "model": self.planner_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.6,
+                "max_tokens": 120,
+                "reasoning": {"effort": "low"}
+            },
+            {
+                "model": self.planner_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.6,
+                "max_tokens": 120
+            }
+        ]
+        try:
+            async with aiohttp.ClientSession() as session:
+                for body in payloads:
+                    try:
+                        async with session.post(url_chat, headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                                cleaned = self._sanitize_planned_text(text)
+                                if cleaned and not self._contains_reactive(cleaned):
+                                    return cleaned
+                            else:
+                                _ = await resp.text()
+                    except Exception:
+                        continue
+        except Exception:
+            return None
+        return None
 
     async def _collect_joke_response(self) -> Dict[str, Any]:
         """

@@ -48,10 +48,13 @@ let reactionSeries = [];
 let reactionCanvas = null;
 let reactionCtx = null;
 const REACTION_WINDOW_MS = 30000; // last 30s
+const REACTION_OBSERVE_MS = 1500; // wait after audio finishes to gather reactions
 let reactionAnimationHandle = null;
 let jokeMarkers = [];
 let visualFetchInFlight = false;
 const VISUAL_INTERVAL_MS = 1500;
+// Joke counter state
+let jokeCount = 0;
 
 // Elements
 const logsContainer = document.getElementById('logs-container');
@@ -61,6 +64,7 @@ const cameraPreview = document.getElementById('camera-preview');
 const micStatus = document.getElementById('mic-status');
 const micDot = document.getElementById('mic-dot');
 const statusText = document.getElementById('status-text');
+const jokeCounterEl = document.getElementById('joke-counter');
 
 // Modal
 const modal = document.getElementById('response-modal');
@@ -118,6 +122,7 @@ window.addEventListener('load', () => {
     connectServiceLogs('audience', `${OPENAI_COMPAT_API_BASE}/stream/logs`);
     connectServiceLogs('joke', `${JOKE_API_BASE}/stream/logs`);
     initReactionPlot();
+    if (jokeCounterEl) jokeCounterEl.textContent = '0';
 });
 
 // Logging
@@ -252,6 +257,7 @@ async function startSession() {
                         timelineEvents.push({ type: 'joke', ts: lastJokeAt, text: j.text, joke_id: j.joke_id });
                         if (timelineEvents.length > 500) timelineEvents.shift();
                         try { pushJokeMarker(lastJokeAt, j && j.joke_id); } catch(_){}
+                        try { incJokeCounter(); } catch(_){}
                     }
                 })
                 .catch(() => {})
@@ -293,6 +299,9 @@ async function startSession() {
         micStatus && (micStatus.textContent = 'Listening...');
         micDot && micDot.classList.add('on');
         statusText && (statusText.textContent = 'Session running');
+        // Reset joke counter UI on start
+        jokeCount = 0;
+        if (jokeCounterEl) jokeCounterEl.textContent = '0';
         addLog('system', 'Session started', 'success');
     } catch (err) {
         addLog('system', `Permission or device error: ${err.message}`, 'error');
@@ -521,10 +530,10 @@ async function playPcm16Base64(b64, sampleRate = 24000) {
                 audioPlaying = false;
                 try { URL.revokeObjectURL(url); } catch (_) {}
             };
-            audio.onended = () => { lastJokeEndAt = Date.now(); cleanup(); resolve(); try { triggerIfReady(); } catch (_) {} };
+            audio.onended = () => { lastJokeEndAt = Date.now(); cleanup(); resolve(); };
             audio.onerror = () => { cleanup(); resolve(); };
             audio.play().catch(() => { cleanup(); resolve(); });
-            setTimeout(() => { lastJokeEndAt = Date.now(); cleanup(); resolve(); try { triggerIfReady(); } catch (_) {} }, 15000);
+            setTimeout(() => { lastJokeEndAt = Date.now(); cleanup(); resolve(); }, 15000);
         } catch (_) { resolve(); }
     });
 }
@@ -787,6 +796,15 @@ function initReactionPlot() {
     window.addEventListener('resize', () => { if (reactionCanvas) renderReactionPlot(); });
 }
 
+function setJokeCounter(n) {
+    jokeCount = n;
+    if (jokeCounterEl) jokeCounterEl.textContent = String(jokeCount);
+}
+
+function incJokeCounter() {
+    setJokeCounter(jokeCount + 1);
+}
+
 function pushJokeMarker(ts, jokeId) {
     jokeMarkers.push({ ts, jokeId });
     const cutoff = Date.now() - REACTION_WINDOW_MS * 2;
@@ -877,6 +895,9 @@ function buildJokeContext(baseAnalysis) {
 function maybeTriggerJoke(analysis) {
     const now = Date.now();
     if (audioPlaying || speechQueue.length > 0 || jokeInFlight || (now - lastJokeTs) < JOKE_COOLDOWN_MS) return;
+    // Ensure we observed reactions after the last audio
+    const baseEnd = lastJokeEndAt || lastJokeTs || 0;
+    if ((now - baseEnd) < REACTION_OBSERVE_MS) return;
     jokeInFlight = true;
     lastJokeTs = Date.now();
     const includeAudio = true;
@@ -905,6 +926,7 @@ function maybeTriggerJoke(analysis) {
                 timelineEvents.push({ type: 'joke', ts: lastJokeAt, text: j.text, joke_id: j.joke_id });
                 if (timelineEvents.length > 500) timelineEvents.shift();
                 try { pushJokeMarker(lastJokeAt, j && j.joke_id); } catch(_){}
+                try { incJokeCounter(); } catch(_){}
             }
         })
         .catch(() => {})
@@ -915,7 +937,18 @@ function scheduleFallback() {
     if (fallbackTimeout) { clearTimeout(fallbackTimeout); fallbackTimeout = null; }
     if (!sessionRunning) return;
     const baseTime = lastJokeEndAt || lastJokeTs;
-    const delay = Math.max(500, JOKE_FALLBACK_MS - (Date.now() - baseTime));
+    const now = Date.now();
+    // Dynamic pacing from latest verdict
+    const aVerdict = latestAudioAnalysis && (latestAudioAnalysis.verdict || latestAudioAnalysis.reaction_type);
+    let extra = 0;
+    if (aVerdict === 'hit') extra = 1200; // give laughs room
+    else if (aVerdict === 'mixed') extra = 800;
+    else if (aVerdict === 'miss') extra = 300;
+    else extra = 600; // neutral/uncertain
+    const earliest = (baseTime || now) + REACTION_OBSERVE_MS + extra;
+    const cooldownEarliest = (lastJokeTs || now) + JOKE_COOLDOWN_MS;
+    const targetAt = Math.max(earliest, cooldownEarliest);
+    const delay = Math.max(250, targetAt - now);
     fallbackTimeout = setTimeout(() => {
         if (!sessionRunning) return;
         if (audioPlaying || speechQueue.length > 0 || jokeInFlight) return scheduleFallback();
@@ -945,6 +978,7 @@ function scheduleFallback() {
                     timelineEvents.push({ type: 'joke', ts: lastJokeAt, text: j.text, joke_id: j.joke_id });
                     if (timelineEvents.length > 500) timelineEvents.shift();
                     try { pushJokeMarker(lastJokeAt, j && j.joke_id); } catch(_){}
+                    try { incJokeCounter(); } catch(_){}
                 }
             })
             .catch(() => {})
